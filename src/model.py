@@ -42,7 +42,6 @@ class MyModel(Model):
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    #@tf.function
     def fissher_info(self, images, labels):
         self.FIM = []
         num_samples = images.shape[0]
@@ -60,6 +59,7 @@ class MyModel(Model):
             indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax], axis=1)
             loglikelihoods = tf.math.log(tf.gather_nd(probs, indexes))
         grads = tape.gradient(loglikelihoods, self.trainable_variables)
+
         for fim, grad in zip(self.FIM, grads):
             fim += np.square(grad)
 
@@ -72,31 +72,11 @@ class MyModel(Model):
 
     def ewc_loss(self, logits, answer, lam=50):
         loss = self.loss_function(y_true=answer, y_pred=logits)
-        #print(loss)
         for i in range(len(self.FIM)):
             fisher = self.FIM[i]
             val = self.trainable_variables[i]
             star_val = self.star_val[i]
-            a = lam/2
-            b = val - star_val
-            c = tf.square(b)
-            d = tf.multiply(tf.cast(fisher, dtype=tf.float32), c)
-            e = a * tf.reduce_sum(d)
-            """
-            if i == 0:
-                print("----")
-                print(star_val)
-                print(val)
-                print("----")
-            """
-            loss += e
-            #sys.exit()
-        """
-        for fisher, val, star_val in zip(self.trainable_variables, self.FIM, self.star_val):
-            loss += (lam/2) * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
-        """
-        #print(loss)
-        
+            loss += lam/2 * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
         return loss
 
     def optimize(self, loss, tape=None):
