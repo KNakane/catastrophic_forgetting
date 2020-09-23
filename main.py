@@ -18,7 +18,7 @@ def find_gpu():
 def main(args):
     # GPU setting
     gpu = find_gpu()
-    args.gpu = "/gpu:{}".format(gpu) if gpu >= 0 else "/cpu:0"
+    FLAGS.gpu = "/gpu:{}".format(gpu) if gpu >= 0 else "/cpu:0"
 
     # dataset
     dataset = Dataset(name='mnist')
@@ -27,33 +27,34 @@ def main(args):
     model = DNN(name='DNN',
                 input_shape=dataset.input_shape,
                 out_dim=dataset.output_dim,
-                opt=args.opt,
-                lr=args.lr)
+                opt=FLAGS.opt,
+                lr=FLAGS.lr)
 
     message = OrderedDict({
-        "epoch":args.n_epoch,
-        "batch_size": args.batch_size,
-        "Optimizer":args.opt,
-        "learning_rate":args.lr,
-        "l2_norm": args.l2_norm,
-        "GPU/CPU": args.gpu})
+        "epoch":FLAGS.n_epoch,
+        "batch_size": FLAGS.batch_size,
+        "Optimizer":FLAGS.opt,
+        "learning_rate":FLAGS.lr,
+        "l2_norm": FLAGS.l2_norm,
+        "GPU/CPU": FLAGS.gpu})
 
     # Training
-    #trainer = Trainer(dataset=dataset, model=model, epoch=args.n_epoch, batch_size=args.batch_size, device=device)
-    trainer = Trainer(FLAGS=args, message=message, data=dataset, model=model, name='DNN')
+    #trainer = Trainer(dataset=dataset, model=model, epoch=FLAGS.n_epoch, batch_size=FLAGS.batch_size, device=device)
+    trainer = Trainer(FLAGS=FLAGS, message=message, data=dataset, model=model, name='DNN')
     trainer.train()
     return
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--n_epoch', default=30, type=int, help='Input max epoch')
-    parser.add_argument('--batch_size', default=32, type=int, help='Input batch size')
-    parser.add_argument('--opt', default='SGD', type=str, choices=['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop'])
-    parser.add_argument('--lr', default=0.1, type=float, help='Input learning rate')
-    parser.add_argument('--l2_norm', action='store_true', help='L2 normalization or not')
-    parser.add_argument('--init_model', default=None, type=str, help='Choice the checkpoint directpry(ex. ./results/181225_193106/model)')
-    parser.add_argument('--checkpoints_to_keep', default=5, type=int, help='checkpoint keep count')
-    parser.add_argument('--keep_checkpoint_every_n_hours', default=1, type=int, help='checkpoint create hour')
-    parser.add_argument('--save_checkpoint_steps', default=100, type=int, help='save checkpoint step')
-    args = parser.parse_args()
-    main(args)
+    flags = tf.app.flags
+    FLAGS = flags.FLAGS
+    flags.DEFINE_integer('n_epoch', 1000, 'Input max epoch')
+    flags.DEFINE_integer('batch_size', 32, 'Input batch size')
+    flags.DEFINE_string('opt', 'SGD', "['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop']")
+    flags.DEFINE_float('lr', 0.1, 'Input learning rate')
+    flags.DEFINE_bool('l2_norm', False, 'L2 normalization or not')
+    flags.DEFINE_string('init_model', None, 'Choice the checkpoint directpry(ex. ./results/181225_193106/model)')
+    flags.DEFINE_integer('checkpoints_to_keep', 5, 'checkpoint keep count')
+    flags.DEFINE_integer('keep_checkpoint_every_n_hours', 1, 'checkpoint create hour')
+    flags.DEFINE_integer('save_checkpoint_steps', 100, 'save checkpoint step')
+    flags.DEFINE_integer('gpu', -1, 'Using GPU')
+    tf.app.run()

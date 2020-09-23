@@ -13,20 +13,17 @@ class MyModel(Model):
                  opt="Adam",   # Choice the optimizer -> ["SGD","Momentum","Adadelta","Adagrad","Adam","RMSProp"]
                  lr=0.001,
                  l2_reg=False,
-                 l2_reg_scale=0.0001
+                 l2_reg_scale=0.0001,
+                 trainable=False
                  ):
         super().__init__()
         self.model_name = name
         self.out_dim = out_dim
-        self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
-        self.l2_regularizer = tf.keras.regularizers.l2(l2_reg_scale) if l2_reg else None
-        self._build()
-        self.loss_function = tf.losses.CategoricalCrossentropy()
-        self.accuracy_functionA = tf.keras.metrics.CategoricalAccuracy()
-        self.accuracy_functionB = tf.keras.metrics.CategoricalAccuracy()
-        with tf.device("/cpu:0"):
-            self(x=tf.constant(tf.zeros(shape=(1,)+input_shape,
-                                             dtype=tf.float32)))
+        self._l2_reg = l2_reg
+        self._l2_reg_scale = tf.contrib.layers.l2_regularizer(scale=l2_reg_scale) if self._l2_reg else None
+        self._trainable = trainable
+        if self._trainable:
+            self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
 
     def _build(self):
         raise NotImplementedError()
@@ -36,13 +33,11 @@ class MyModel(Model):
 
     def star(self):
         self.star_val = copy.deepcopy(self.trainable_variables)#.copy()
-        #print(self.trainable_weights)
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    #@tf.function
     def fissher_info(self, images, labels):
         self.FIM = []
         num_samples = images.shape[0]
@@ -68,11 +63,13 @@ class MyModel(Model):
         return
 
     def loss(self, logits, answer):
-        return self.loss_function(y_true=answer, y_pred=logits)
+        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=answer))
+        if self._l2_reg:
+            loss += tf.losses.get_regularization_loss()  
+        return loss
 
     def ewc_loss(self, logits, answer, lam=50):
-        loss = self.loss_function(y_true=answer, y_pred=logits)
-        #print(loss)
+        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=answer))
         for i in range(len(self.FIM)):
             fisher = self.FIM[i]
             val = self.trainable_variables[i]
@@ -99,19 +96,13 @@ class MyModel(Model):
         
         return loss
 
-    def optimize(self, loss, tape=None):
-        assert tape is not None, 'please set tape in opmize'
-        grads = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.method.apply_gradients(zip(grads, self.trainable_variables))
-        return
+    def optimize(self, loss, global_step=None):
+        return self.optimizer.optimize(loss=loss, global_step=global_step)
 
-    def accuracyA(self, logits, answer):
-        self.accuracy_functionA.update_state(y_true=answer, y_pred=logits)
-        return self.accuracy_functionA.result()
-
-    def accuracyB(self, logits, answer):
-        self.accuracy_functionB.update_state(y_true=answer, y_pred=logits)
-        return self.accuracy_functionB.result()
+    def evaluate(self, logits, labels, prefix):
+        with tf.variable_scope('Accuracy_{}'.format(prefix)):
+            correct_prediction = tf.equal(tf.argmax(logits,1), tf.argmax(labels, 1))
+            return tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
 
 class CNN(MyModel):
@@ -131,7 +122,6 @@ class CNN(MyModel):
         self.out = tf.keras.layers.Dense(self.out_dim, activation='softmax')
         return
     
-    @tf.function
     def __call__(self, x, trainable=True):
         with tf.name_scope(self.name):
             x = self.conv1(x, training=trainable)
@@ -149,21 +139,15 @@ class DNN(MyModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.optimizer = eval(kwargs['opt'])(learning_rate=kwargs['lr'], decay_step=None, decay_rate=0.95)
-
-    def _build(self):
-        self.flat = tf.keras.layers.Flatten()
-        self.fc1 = tf.keras.layers.Dense(50, activation='relu', kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
-                                         bias_initializer=tf.keras.initializers.Ones(), kernel_regularizer=self.l2_regularizer)
-        #self.fc2 = tf.keras.layers.Dense(50, activation='relu', kernel_regularizer=self.l2_regularizer)
-        self.out = tf.keras.layers.Dense(self.out_dim, kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
-                                         bias_initializer=tf.keras.initializers.Ones(), activation='softmax')
-        return
     
-    #@tf.function
-    def __call__(self, x, trainable=True):
-        with tf.name_scope(self.name):
-            x = self.flat(x, training=trainable)
-            x = self.fc1(x, training=trainable)
-            #x = self.fc2(x, training=trainable)
-            x = self.out(x, training=trainable)
+    def inference(self, x, reuse=False):
+        with tf.variable_scope(self.name):
+            if reuse:
+                tf.get_variable_scope().reuse_variables()
+            x = tf.layers.flatten(x, name='flatten')
+            x = tf.layers.dense(inputs=x, units=50, activation='relu', kernel_regularizer=self._l2_reg_scale, use_bias=True)
+            x = tf.layers.dense(inputs=x, units=self.out_dim, activation=None, kernel_regularizer=self._l2_reg_scale, use_bias=True)
             return x
+    
+    def test_inference(self, outputs, reuse=False):
+        return self.inference(outputs, reuse)
