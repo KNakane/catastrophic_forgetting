@@ -22,6 +22,8 @@ class MyModel(Model):
         self._l2_reg = l2_reg
         self._l2_reg_scale = tf.contrib.layers.l2_regularizer(scale=l2_reg_scale) if self._l2_reg else None
         self._trainable = trainable
+        self.FIM = []
+        self.old_val = []
         if self._trainable:
             self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
 
@@ -31,30 +33,18 @@ class MyModel(Model):
     def __call__(self, x, trainable=True):
         raise NotImplementedError()
 
-    def star(self):
-        self.star_val = copy.deepcopy(self.trainable_variables)#.copy()
+    def set_old_val(self):
+        self.old_val = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        #self.old_val = copy.deepcopy(self.trainable_variables)#.copy()
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    def fissher_info(self, images, labels):
-        self.FIM = []
-        num_samples = images.shape[0]
-        for param in self.trainable_variables:
+    def fissher_info(self, grads, num_samples):
+        for param in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
             self.FIM.append(np.zeros(param.shape))
-
-        with tf.GradientTape() as tape:
-            logits = self.__call__(images, trainable=True)
-            probs = tf.nn.softmax(logits)
-            """
-            argmax = tf.cast(tf.argmax(labels, axis=1), dtype=tf.int32)
-            indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax[:,tf.newaxis]], axis=1)
-            """
-            argmax = tf.cast(tf.random.categorical(probs, 1), dtype=tf.int32)
-            indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax], axis=1)
-            loglikelihoods = tf.math.log(tf.gather_nd(probs, indexes))
-        grads = tape.gradient(loglikelihoods, self.trainable_variables)
+        
         for fim, grad in zip(self.FIM, grads):
             fim += np.square(grad)
 
@@ -62,38 +52,31 @@ class MyModel(Model):
             self.FIM[v] /= num_samples
         return
 
-    def loss(self, logits, answer):
+    def loss(self, logits, answer, mode=None):
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=answer))
         if self._l2_reg:
-            loss += tf.losses.get_regularization_loss()  
+            loss += tf.losses.get_regularization_loss()
+        if mode == "EWC":
+            loss += self.ewc_loss(logits, answer)
+        elif mode == "L2":
+            loss += self.l2_penalty()
         return loss
 
-    def ewc_loss(self, logits, answer, lam=50):
-        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=answer))
+    def l2_penalty(self):
+        penalty = 0
+        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        for i, old_val in enumerate(self.old_val):
+            penalty += tf.norm(variables[i] - old_val)
+        return 0.5 * penalty
+
+    def ewc_loss(self, logits, answer, lam=25):
+        loss = 0
+        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         for i in range(len(self.FIM)):
             fisher = self.FIM[i]
-            val = self.trainable_variables[i]
-            star_val = self.star_val[i]
-            a = lam/2
-            b = val - star_val
-            c = tf.square(b)
-            d = tf.multiply(tf.cast(fisher, dtype=tf.float32), c)
-            e = a * tf.reduce_sum(d)
-            """
-            if i == 0:
-                print("----")
-                print(star_val)
-                print(val)
-                print("----")
-            """
-            loss += e
-            #sys.exit()
-        """
-        for fisher, val, star_val in zip(self.trainable_variables, self.FIM, self.star_val):
-            loss += (lam/2) * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
-        """
-        #print(loss)
-        
+            val = variables[i]
+            star_val = self.old_val[i]
+            loss += lam/2 * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
         return loss
 
     def optimize(self, loss, global_step=None):

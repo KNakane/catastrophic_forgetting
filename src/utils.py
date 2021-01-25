@@ -55,7 +55,7 @@ class Utils():
         return 
 
 
-    def write_log(self, message, test=False):
+    def write_log(self, message, test=False, cout=False):
         """
         学習状況をテキストに出力する
         parameters
@@ -73,6 +73,8 @@ class Utils():
         else:
             with open(self.log_dir + '/log.txt', 'a') as f:
                 f.write(str(info))
+        if cout:
+            print(info)
         return 
 
     def save_init(self, model, keep=5, n_hour=1):

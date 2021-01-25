@@ -49,6 +49,7 @@ if __name__ == "__main__":
     FLAGS = flags.FLAGS
     flags.DEFINE_integer('n_epoch', 1000, 'Input max epoch')
     flags.DEFINE_integer('batch_size', 32, 'Input batch size')
+    flags.DEFINE_string('method', "EWC", "[EWC, L2]")
     flags.DEFINE_string('opt', 'SGD', "['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop']")
     flags.DEFINE_float('lr', 0.1, 'Input learning rate')
     flags.DEFINE_bool('l2_norm', False, 'L2 normalization or not')
