@@ -51,7 +51,7 @@ if __name__ == "__main__":
     flags.DEFINE_integer('batch_size', 32, 'Input batch size')
     flags.DEFINE_string('method', "EWC", "[EWC, L2]")
     flags.DEFINE_string('opt', 'SGD', "['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop']")
-    flags.DEFINE_float('lr', 0.1, 'Input learning rate')
+    flags.DEFINE_float('lr', 0.001, 'Input learning rate')
     flags.DEFINE_bool('l2_norm', False, 'L2 normalization or not')
     flags.DEFINE_string('init_model', None, 'Choice the checkpoint directpry(ex. ./results/181225_193106/model)')
     flags.DEFINE_integer('checkpoints_to_keep', 5, 'checkpoint keep count')
