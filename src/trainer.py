@@ -38,21 +38,16 @@ class Trainer():
             img_list.append(x_train[5])
             self.data.image_imshow(img_list, self.util.log_dir)
         train_dataset = self.data.load(x_train, y_train, batch_size=self.batch_size, is_training=True)
-        valid_dataset = self.data.load(x_valid, y_valid, batch_size=200, is_training=False)
-        test_dataset = self.data.load(x_test, y_test, batch_size=self.batch_size*10, is_training=False)
+        valid_dataset = self.data.load(x_valid, y_valid, batch_size=1000, is_training=False)
+        test_dataset = self.data.load(x_test, y_test, batch_size=1000, is_training=False)
         return train_dataset, valid_dataset, test_dataset
 
-    def begin_train(self):
-        # GPU allow_growth
-        if tf.config.experimental.list_physical_devices('GPU'):
-            for cur_device in tf.config.experimental.list_physical_devices("GPU"):
-                tf.config.experimental.set_memory_growth(cur_device, enable=True)
-        
+    def begin_train(self):    
         self.util.write_configuration(self.message, True)
         self.util.save_init(self.model, keep=self.checkpoints_to_keep, n_hour=self.keep_checkpoint_every_n_hours)
         return tf.summary.create_file_writer(self.util.tf_board)
 
-    #@tf.function
+    @tf.function
     def _train_body(self, images, labels, taskB=False):
         with tf.device(self.device):
             with tf.GradientTape() as tape:
@@ -71,7 +66,7 @@ class Trainer():
                     acc = self.model.accuracyA(y_pre, labels)
         return y_pre, loss, acc
 
-    #@tf.function
+    @tf.function
     def _test_body(self, images, labels, taskB=False):
         with tf.device(self.device):
             with tf.name_scope('test_logits'):
@@ -126,58 +121,29 @@ class Trainer():
         # Graph for tensorboard
         tf.summary.trace_on(graph=True, profiler=True)
         with board_writer.as_default():
-            pretrain = tf.function(self._train_body)
-            pretest = tf.function(self._test_body)
-
-            for i in range(1, self.n_epoch+1):
-                start_time = time.time()
-                for (train_images, train_labels) in train_datasetA:
-                    _, train_loss, train_accuracy = pretrain(train_images, train_labels)
-                if i == 1:
-                    tf.summary.trace_export("summary", step=1, profiler_outdir=self.util.tf_board)
-                    tf.summary.trace_off()
-
-                time_per_episode = time.time() - start_time
-                for (test_images, test_labels) in test_datasetA:
-                    _, test_lossA, test_accuracyA = pretest(test_images, test_labels)
-
-                # Training results
-                metrics = OrderedDict({
-                    "epoch": i,
-                    "train_loss": train_loss.numpy(),
-                    "train_accuracy":train_accuracy.numpy(),
-                    "test_lossA": test_lossA.numpy(),
-                    "test_accuracyA" : test_accuracyA.numpy(),
-                    "time/epoch": time_per_episode
-                })
-
-                #
-                other_metrics = OrderedDict({
-                    "train_image" : train_images[:3],
-                    "test_image" : test_images[:3]
-                })
-                self.epoch_end(metrics, other_metrics)
-            
-            # save model parameter
-            for (valid_inputs, valid_answer) in valid_datasetA:
-                pass
-            self.model.fissher_info(valid_inputs, valid_answer)
-            self.model.star()
-        
             Accuracy_A, Accuracy_B = [], []
-            retrain = tf.function(self._train_body)
-            retest = tf.function(self._test_body)
-            for i in range(1, self.n_epoch+1):
-                start_time = time.time()
-                for (train_images, train_labels) in train_datasetB:
-                    _, train_loss, train_accuracy = retrain(train_images, train_labels, taskB=True)
 
+            for i in range(1, self.n_epoch*2+1):
+                if self.method == "EWC" and i == self.n_epoch + 1:
+                    self.model.fissher_info(valid_datasetA, num_batches=1000)
+                if i < self.n_epoch + 1:
+                    train_dataset = train_datasetA
+                    taskB_flag = False
+                else:
+                    train_dataset = train_datasetB
+                    taskB_flag = True
+                    self.model.star()
+                
+                start_time = time.time()
+                for (train_images, train_labels) in train_dataset:
+                    _, train_loss, train_accuracy = self._train_body(train_images, train_labels, taskB=taskB_flag)
                 time_per_episode = time.time() - start_time
+
                 for (test_images, test_labels) in test_datasetA:
-                    _, test_lossA, test_accuracyA = retest(test_images, test_labels)
+                    _, test_lossA, test_accuracyA = self._test_body(test_images, test_labels)
 
                 for (test_images, test_labels) in test_datasetB:
-                    _, test_lossB, test_accuracyB = retest(test_images, test_labels, taskB=True)
+                    _, test_lossB, test_accuracyB = self._test_body(test_images, test_labels, taskB=True)
 
                 # Training results
                 metrics = OrderedDict({
@@ -190,12 +156,11 @@ class Trainer():
                     "test_accuracyB" : test_accuracyB.numpy(),
                     "time/epoch": time_per_episode
                 })
-
-                #
                 other_metrics = OrderedDict({
                     "train_image" : train_images[:3],
                     "test_image" : test_images[:3]
                 })
+
                 Accuracy_A.append(test_accuracyA.numpy())
                 Accuracy_B.append(test_accuracyB.numpy())
                 self.epoch_end(metrics, other_metrics)
@@ -205,7 +170,7 @@ class Trainer():
 
     def progress_graph(self, taskA, taskB):
         plt.clf()
-        n_epoch = list(range(self.n_epoch))
+        n_epoch = np.arange(len(taskA))
         # プロット
         plt.plot(n_epoch, taskA, label="taskA")
         plt.plot(n_epoch, taskB, label="taskB")
@@ -214,6 +179,6 @@ class Trainer():
         plt.legend()
         plt.grid()
 
-        plt.savefig("./progress.png")
+        plt.savefig("./progress_{}.png".format(self.method))
         plt.close()
         return

@@ -35,43 +35,31 @@ class MyModel(Model):
         raise NotImplementedError()
 
     def star(self):
-        self.star_val = copy.deepcopy(self.trainable_variables)#.copy()
+        self.star_val = {n: p.value() for n, p in enumerate(copy.deepcopy(self.trainable_variables))}
+        #self.star_val = copy.deepcopy(self.trainable_variables)#.copy()
         #print(self.trainable_weights)
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    def fissher_info(self, images, labels):
-        self.FIM = []
-        num_samples = images.shape[0]
-        for param in self.trainable_variables:
-            self.FIM.append(np.zeros(param.shape))
+    def fissher_info(self, dataset, num_batches=1):
 
-        with tf.GradientTape() as tape:
-            logits = self.__call__(images, trainable=False)
-            loglikelihoods = tf.nn.log_softmax(logits)
-            """
-            argmax = tf.cast(tf.argmax(labels, axis=1), dtype=tf.int32)
-            indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax[:,tf.newaxis]], axis=1)
-            
-            argmax = tf.cast(tf.random.categorical(probs, 1), dtype=tf.int32)
-            indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax], axis=1)
-            loglikelihoods = tf.math.log(tf.gather_nd(probs, indexes))
-            """
-        grads = tape.gradient(loglikelihoods, self.trainable_variables)
+        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
 
-        for fim, grad in zip(self.FIM, grads):
-            fim += np.square(grad)
-
-        for v in range(len(self.FIM)):
-            self.FIM[v] /= num_samples
+        for img, _ in dataset.take(num_batches):
+            with tf.GradientTape() as tape:
+                logits = self.__call__(img, trainable=False)
+                loglikelihoods = tf.nn.log_softmax(logits)
+            grads = tape.gradient(loglikelihoods, self.trainable_variables)
+            for i, g in enumerate(grads):
+                self.FIM[i] += tf.reduce_mean(g**2, axis=0) / num_batches
         return
 
     def loss(self, logits, answer, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
         if mode == "EWC":
-            loss += self.ewc_loss(logits, answer)
+            loss += self.ewc_loss(logits, answer, lam=20)
         
         elif mode == "L2":
             loss += self.l2_penalty()
@@ -88,9 +76,8 @@ class MyModel(Model):
 
     def l2_penalty(self):
         penalty = 0
-        variables = self.trainable_variables
-        for i, old_val in enumerate(self.star_val):
-            penalty += tf.norm(variables[i] - old_val)
+        for i, theta_i in enumerate(self.trainable_variables):
+            penalty += tf.reduce_sum((theta_i - self.star_val[i]) ** 2)
         return 0.5 * penalty
 
     def optimize(self, loss, tape=None):
@@ -158,7 +145,7 @@ class DNN(MyModel):
                                          bias_initializer=tf.keras.initializers.Ones(), activation='softmax')
         return
     
-    #@tf.function
+    @tf.function
     def __call__(self, x, trainable=True):
         with tf.name_scope(self.name):
             x = self.flat(x, training=trainable)
