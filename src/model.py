@@ -46,10 +46,8 @@ class MyModel(Model):
             self.FIM.append(np.zeros(param.shape))
         
         for fim, grad in zip(self.FIM, grads):
-            fim += np.square(grad)
+            fim += tf.reduce_mean(tf.square(grad), axis=0) / num_samples
 
-        for v in range(len(self.FIM)):
-            self.FIM[v] /= num_samples
         return
 
     def loss(self, logits, answer, mode=None):
@@ -57,7 +55,7 @@ class MyModel(Model):
         if self._l2_reg:
             loss += tf.losses.get_regularization_loss()
         if mode == "EWC":
-            loss += self.ewc_loss(logits, answer)
+            loss += self.ewc_loss(logits, answer, lam=25)
         elif mode == "L2":
             loss += self.l2_penalty()
         return loss
