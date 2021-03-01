@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 class Trainer():
     def __init__(self,
-                 FLAGS,
+                 args,
                  message,
                  data,
                  model,
@@ -18,13 +18,14 @@ class Trainer():
         self.message = message
         self.data = data
         self.model = model
-        self.n_epoch = FLAGS.n_epoch
-        self.save_checkpoint_steps = self.n_epoch / 10 if FLAGS.save_checkpoint_steps is None else FLAGS.save_checkpoint_steps
-        self.checkpoints_to_keep = FLAGS.checkpoints_to_keep
-        self.keep_checkpoint_every_n_hours = FLAGS.keep_checkpoint_every_n_hours
-        self.batch_size = FLAGS.batch_size
-        self.restore_dir = FLAGS.init_model
-        self.device = FLAGS.gpu
+        self.method = args.method
+        self.n_epoch = args.n_epoch
+        self.save_checkpoint_steps = self.n_epoch / 10 if args.save_checkpoint_steps is None else args.save_checkpoint_steps
+        self.checkpoints_to_keep = args.checkpoints_to_keep
+        self.keep_checkpoint_every_n_hours = args.keep_checkpoint_every_n_hours
+        self.batch_size = args.batch_size
+        self.restore_dir = args.init_model
+        self.device = args.gpu
         self.util = Utils(prefix=self.name)
         self.util.initial()
 
@@ -51,7 +52,7 @@ class Trainer():
         self.util.save_init(self.model, keep=self.checkpoints_to_keep, n_hour=self.keep_checkpoint_every_n_hours)
         return tf.summary.create_file_writer(self.util.tf_board)
 
-    @tf.function
+    #@tf.function
     def _train_body(self, images, labels, taskB=False):
         with tf.device(self.device):
             with tf.GradientTape() as tape:
@@ -59,15 +60,18 @@ class Trainer():
                     y_pre = self.model(images)
                 with tf.name_scope('train_loss'):
                     if taskB:
-                        loss = self.model.ewc_loss(y_pre, labels)
+                        loss = self.model.loss(y_pre, labels, self.method)
                     else:
                         loss = self.model.loss(y_pre, labels)
             self.model.optimize(loss, tape)
             with tf.name_scope('train_accuracy'):
-                acc = self.model.accuracyA(y_pre, labels)
+                if taskB:
+                    acc = self.model.accuracyB(y_pre, labels)
+                else:
+                    acc = self.model.accuracyA(y_pre, labels)
         return y_pre, loss, acc
 
-    @tf.function
+    #@tf.function
     def _test_body(self, images, labels, taskB=False):
         with tf.device(self.device):
             with tf.name_scope('test_logits'):
@@ -82,6 +86,7 @@ class Trainer():
         return y_pre, loss, acc
 
     def epoch_end(self, metrics, other=None):
+        self.model.reset_accuracy()
         learning_rate = self.model.optimizer.lr(metrics['epoch']).numpy() if type(self.model.optimizer.lr) is tf.optimizers.schedules.ExponentialDecay else self.model.optimizer.lr
         tf.summary.experimental.set_step(metrics['epoch'])
         tf.summary.scalar('detail/epoch', metrics['epoch'])
@@ -118,29 +123,23 @@ class Trainer():
         train_datasetA, valid_datasetA, test_datasetA = self.load()
         train_datasetB, valid_datasetB, test_datasetB = self.load(perm=True)
 
-        # set mean loss
-        train_loss_fn = tf.keras.metrics.Mean(name='train_loss')
-        test_loss_fnA = tf.keras.metrics.Mean(name='test_lossA')
-        test_loss_fnB = tf.keras.metrics.Mean(name='test_lossB')
-
         # Graph for tensorboard
         tf.summary.trace_on(graph=True, profiler=True)
         with board_writer.as_default():
-            
+            pretrain = tf.function(self._train_body)
+            pretest = tf.function(self._test_body)
+
             for i in range(1, self.n_epoch+1):
-            #for i in range(1,2):
                 start_time = time.time()
                 for (train_images, train_labels) in train_datasetA:
-                    _, loss, train_accuracy = self._train_body(train_images, train_labels)
-                    train_loss = train_loss_fn(loss)
+                    _, train_loss, train_accuracy = pretrain(train_images, train_labels)
                 if i == 1:
                     tf.summary.trace_export("summary", step=1, profiler_outdir=self.util.tf_board)
                     tf.summary.trace_off()
 
                 time_per_episode = time.time() - start_time
                 for (test_images, test_labels) in test_datasetA:
-                    _, lossA, test_accuracyA = self._test_body(test_images, test_labels)
-                    test_lossA = test_loss_fnA(lossA)
+                    _, test_lossA, test_accuracyA = pretest(test_images, test_labels)
 
                 # Training results
                 metrics = OrderedDict({
@@ -164,23 +163,21 @@ class Trainer():
                 pass
             self.model.fissher_info(valid_inputs, valid_answer)
             self.model.star()
-            #sys.exit()
         
             Accuracy_A, Accuracy_B = [], []
+            retrain = tf.function(self._train_body)
+            retest = tf.function(self._test_body)
             for i in range(1, self.n_epoch+1):
                 start_time = time.time()
                 for (train_images, train_labels) in train_datasetB:
-                    _, loss, train_accuracy = self._train_body(train_images, train_labels, taskB=True)
-                    train_loss = train_loss_fn(loss)
+                    _, train_loss, train_accuracy = retrain(train_images, train_labels, taskB=True)
 
                 time_per_episode = time.time() - start_time
                 for (test_images, test_labels) in test_datasetA:
-                    _, lossA, test_accuracyA = self._test_body(test_images, test_labels)
-                    test_lossA = test_loss_fnA(lossA)
+                    _, test_lossA, test_accuracyA = retest(test_images, test_labels)
 
                 for (test_images, test_labels) in test_datasetB:
-                    _, lossB, test_accuracyB = self._test_body(test_images, test_labels, taskB=True)
-                    test_lossB = test_loss_fnB(lossB)
+                    _, test_lossB, test_accuracyB = retest(test_images, test_labels, taskB=True)
 
                 # Training results
                 metrics = OrderedDict({

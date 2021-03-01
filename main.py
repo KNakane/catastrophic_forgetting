@@ -30,26 +30,21 @@ def main(args):
                 opt=args.opt,
                 lr=args.lr)
 
-    message = OrderedDict({
-        "epoch":args.n_epoch,
-        "batch_size": args.batch_size,
-        "Optimizer":args.opt,
-        "learning_rate":args.lr,
-        "l2_norm": args.l2_norm,
-        "GPU/CPU": args.gpu})
+    message = vars(args)
 
     # Training
     #trainer = Trainer(dataset=dataset, model=model, epoch=args.n_epoch, batch_size=args.batch_size, device=device)
-    trainer = Trainer(FLAGS=args, message=message, data=dataset, model=model, name='DNN')
+    trainer = Trainer(args=args, message=message, data=dataset, model=model, name='DNN')
     trainer.train()
     return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--n_epoch', default=30, type=int, help='Input max epoch')
+    parser.add_argument('--n_epoch', default=10, type=int, help='Input max epoch')
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size')
+    parser.add_argument('--method', default=None, choices=["EWC", "L2"])
     parser.add_argument('--opt', default='SGD', type=str, choices=['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop'])
-    parser.add_argument('--lr', default=0.1, type=float, help='Input learning rate')
+    parser.add_argument('--lr', default=0.001, type=float, help='Input learning rate')
     parser.add_argument('--l2_norm', action='store_true', help='L2 normalization or not')
     parser.add_argument('--init_model', default=None, type=str, help='Choice the checkpoint directpry(ex. ./results/181225_193106/model)')
     parser.add_argument('--checkpoints_to_keep', default=5, type=int, help='checkpoint keep count')

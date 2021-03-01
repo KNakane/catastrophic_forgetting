@@ -49,15 +49,16 @@ class MyModel(Model):
             self.FIM.append(np.zeros(param.shape))
 
         with tf.GradientTape() as tape:
-            logits = self.__call__(images, trainable=True)
-            probs = tf.nn.softmax(logits)
+            logits = self.__call__(images, trainable=False)
+            loglikelihoods = tf.nn.log_softmax(logits)
             """
             argmax = tf.cast(tf.argmax(labels, axis=1), dtype=tf.int32)
             indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax[:,tf.newaxis]], axis=1)
-            """
+            
             argmax = tf.cast(tf.random.categorical(probs, 1), dtype=tf.int32)
             indexes = tf.concat([tf.range(num_samples)[:,tf.newaxis], argmax], axis=1)
             loglikelihoods = tf.math.log(tf.gather_nd(probs, indexes))
+            """
         grads = tape.gradient(loglikelihoods, self.trainable_variables)
 
         for fim, grad in zip(self.FIM, grads):
@@ -67,17 +68,30 @@ class MyModel(Model):
             self.FIM[v] /= num_samples
         return
 
-    def loss(self, logits, answer):
-        return self.loss_function(y_true=answer, y_pred=logits)
-
-    def ewc_loss(self, logits, answer, lam=50):
+    def loss(self, logits, answer, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
+        if mode == "EWC":
+            loss += self.ewc_loss(logits, answer)
+        
+        elif mode == "L2":
+            loss += self.l2_penalty()
+        return loss
+
+    def ewc_loss(self, logits, answer, lam=25):
+        loss = 0
         for i in range(len(self.FIM)):
             fisher = self.FIM[i]
             val = self.trainable_variables[i]
             star_val = self.star_val[i]
             loss += lam/2 * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
         return loss
+
+    def l2_penalty(self):
+        penalty = 0
+        variables = self.trainable_variables
+        for i, old_val in enumerate(self.star_val):
+            penalty += tf.norm(variables[i] - old_val)
+        return 0.5 * penalty
 
     def optimize(self, loss, tape=None):
         assert tape is not None, 'please set tape in opmize'
@@ -92,6 +106,11 @@ class MyModel(Model):
     def accuracyB(self, logits, answer):
         self.accuracy_functionB.update_state(y_true=answer, y_pred=logits)
         return self.accuracy_functionB.result()
+
+    def reset_accuracy(self):
+        self.accuracy_functionA.reset_states()
+        self.accuracy_functionB.reset_states()
+        return
 
 
 class CNN(MyModel):
