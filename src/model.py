@@ -44,7 +44,7 @@ class MyModel(Model):
         return self.__call__(x, trainable=trainable)
 
     def fissher_info(self, dataset, num_batches=1):
-
+        # cite: https://seanmoriarity.com/2020/10/18/continual-learning-with-ewc/
         self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
 
         for img, _ in dataset.take(num_batches):
