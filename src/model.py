@@ -17,6 +17,7 @@ class MyModel(Model):
                  ):
         super().__init__()
         self.model_name = name
+        self._input_shape = input_shape
         self.out_dim = out_dim
         self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
         self.l2_regularizer = tf.keras.regularizers.l2(l2_reg_scale) if l2_reg else None
@@ -36,17 +37,21 @@ class MyModel(Model):
 
     def star(self):
         self.star_val = {n: p.value() for n, p in enumerate(copy.deepcopy(self.trainable_variables))}
-        #self.star_val = copy.deepcopy(self.trainable_variables)#.copy()
-        #print(self.trainable_weights)
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    def fissher_info(self, dataset, num_batches=1):
+    def fissher_info(self, dataset, num_batches=1, online=False, gamma=1):
         # cite: https://seanmoriarity.com/2020/10/18/continual-learning-with-ewc/
-        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
+        if online:
+            if hasattr(self, 'FIM'):
+                old_FIM = copy.deepcopy(self.FIM)
+            else:
+                old_FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
 
+        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
+        
         for img, _ in dataset.take(num_batches):
             with tf.GradientTape() as tape:
                 logits = self.__call__(img, trainable=False)
@@ -54,11 +59,15 @@ class MyModel(Model):
             grads = tape.gradient(loglikelihoods, self.trainable_variables)
             for i, g in enumerate(grads):
                 self.FIM[i] += tf.reduce_mean(g**2, axis=0) / num_batches
+
+        if online:
+            for k, v in old_FIM.items():
+                self.FIM[k] += gamma * v
         return
 
     def loss(self, logits, answer, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
-        if mode == "EWC":
+        if mode in ["EWC", "OnlineEWC"]:
             loss += self.ewc_loss(logits, answer, lam=20)
         
         elif mode == "L2":
@@ -85,20 +94,7 @@ class MyModel(Model):
         grads = tape.gradient(loss, self.trainable_variables)
         self.optimizer.method.apply_gradients(zip(grads, self.trainable_variables))
         return
-
-    def accuracyA(self, logits, answer):
-        self.accuracy_functionA.update_state(y_true=answer, y_pred=logits)
-        return self.accuracy_functionA.result()
-
-    def accuracyB(self, logits, answer):
-        self.accuracy_functionB.update_state(y_true=answer, y_pred=logits)
-        return self.accuracy_functionB.result()
-
-    def reset_accuracy(self):
-        self.accuracy_functionA.reset_states()
-        self.accuracy_functionB.reset_states()
-        return
-
+        
 
 class CNN(MyModel):
     def __init__(self, *args, **kwargs):
