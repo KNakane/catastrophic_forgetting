@@ -1,4 +1,5 @@
 import os, sys, re
+import copy
 import argparse
 import numpy as np
 import tensorflow as tf
@@ -16,17 +17,20 @@ def find_gpu():
     return -1
 
 def main(args):
+    # check task num
+    assert FLAGS.task_num > 0
+    
     # GPU setting
     gpu = find_gpu()
     FLAGS.gpu = "/gpu:{}".format(gpu) if gpu >= 0 else "/cpu:0"
 
     # dataset
-    dataset = Dataset(name='mnist')
+    datasets = [Dataset(name='mnist', perm=bool(i)) for i in range(FLAGS.task_num)] 
 
     # model
     model = DNN(name='DNN',
-                input_shape=dataset.input_shape,
-                out_dim=dataset.output_dim,
+                input_shape=datasets[0].input_shape,
+                out_dim=datasets[0].output_dim,
                 opt=FLAGS.opt,
                 lr=FLAGS.lr)
 
@@ -40,7 +44,7 @@ def main(args):
 
     # Training
     #trainer = Trainer(dataset=dataset, model=model, epoch=FLAGS.n_epoch, batch_size=FLAGS.batch_size, device=device)
-    trainer = Trainer(FLAGS=FLAGS, message=message, data=dataset, model=model, name='DNN')
+    trainer = Trainer(FLAGS=FLAGS, message=message, datasets=datasets, model=model, name='DNN')
     trainer.train()
     return
 
@@ -49,6 +53,7 @@ if __name__ == "__main__":
     FLAGS = flags.FLAGS
     flags.DEFINE_integer('n_epoch', 1000, 'Input max epoch')
     flags.DEFINE_integer('batch_size', 32, 'Input batch size')
+    flags.DEFINE_integer('task_num', 2, 'Input number of kind of task')
     flags.DEFINE_string('method', None, "[EWC, L2]")
     flags.DEFINE_string('opt', 'SGD', "['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop']")
     flags.DEFINE_float('lr', 0.001, 'Input learning rate')
