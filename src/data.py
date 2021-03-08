@@ -30,14 +30,15 @@ class Dataset():
 
         return (x_train, y_train), (x_valid, y_valid), (x_test, y_test)
 
-    def permutation(self, x_train, x_test):
+    def permutation(self, x_train, x_valid, x_test):
         w_index = range(x_train.shape[1])
         h_index = range(x_train.shape[2])
         w_index = np.random.permutation(w_index)
         h_index = np.random.permutation(h_index)
         x_train = x_train[:,w_index]
+        x_valid = x_valid[:,w_index]
         x_test = x_test[:, w_index]
-        return x_train[:,:, h_index], x_test[:,:, h_index]
+        return x_train[:,:, h_index], x_valid[:,:, h_index], x_test[:,:, h_index]
 
     def load(self, image, label, batch_size=32, buffer_size=1000, is_training=False):
         def preprocess_fn(image, label):
