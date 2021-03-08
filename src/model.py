@@ -42,11 +42,17 @@ class MyModel(Model):
         return self.__call__(x, trainable=trainable)
 
     def fissher_info(self, grads, num_samples):
+        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))}
+        for i, g in enumerate(grads):
+            self.FIM[i] += tf.reduce_mean(g**2, axis=0) / num_samples
+        
+        """
         for param in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
             self.FIM.append(np.zeros(param.shape))
         
         for fim, grad in zip(self.FIM, grads):
             fim += tf.reduce_mean(tf.square(grad), axis=0) / num_samples
+        """
 
         return
 
@@ -55,7 +61,7 @@ class MyModel(Model):
         if self._l2_reg:
             loss += tf.losses.get_regularization_loss()
         if mode == "EWC":
-            loss += self.ewc_loss(logits, answer, lam=25)
+            loss += self.ewc_loss(logits, answer, lam=20)
         elif mode == "L2":
             loss += self.l2_penalty()
         return loss
@@ -80,8 +86,8 @@ class MyModel(Model):
     def optimize(self, loss, global_step=None):
         return self.optimizer.optimize(loss=loss, global_step=global_step)
 
-    def evaluate(self, logits, labels, prefix):
-        with tf.variable_scope('Accuracy_{}'.format(prefix)):
+    def evaluate(self, logits, labels):
+        with tf.variable_scope('Accuracy'):
             correct_prediction = tf.equal(tf.argmax(logits,1), tf.argmax(labels, 1))
             return tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
