@@ -6,7 +6,7 @@ from tensorflow.keras.datasets import *
 from sklearn.model_selection import train_test_split
 
 class Dataset():
-    def __init__(self, name='mnist'):
+    def __init__(self, name='mnist', perm=False):
         self.datasets = tf.keras.datasets.mnist
 
         # Information
@@ -14,7 +14,8 @@ class Dataset():
         self.output_dim = 10
 
         (self.x_train, self.y_train), (self.x_valid, self.y_valid), (self.x_test, self.y_test) = self.get()
-        self.x_train_perm, self.x_valid_perm, self.x_test_perm = self.permutation(self.x_train, self.x_valid, self.x_test)
+        if perm:
+            self.x_train, self.x_valid, self.x_test = self.permutation(self.x_train, self.x_valid, self.x_test)
         
 
         self.__train_num = self.x_train.shape[0]
@@ -93,7 +94,7 @@ class Dataset():
 
             return dataset
 
-    def next_batch(self, batch_size, test=False, valid=False, perm=False):
+    def next_batch(self, batch_size, test=False, valid=False):
         assert not (valid and test), 'select either valid or test'
         if valid:
             idx = self.__valid_idx.copy()
@@ -104,13 +105,13 @@ class Dataset():
         np.random.shuffle(idx)
         index = idx[:batch_size]
         if valid:
-            inputs = self.x_valid_perm[index] if perm else self.x_valid[index]
+            inputs = self.x_valid[index]
             labels = self.y_valid[index]
         elif test:
-            inputs = self.x_test_perm[index] if perm else self.x_test[index]
+            inputs = self.x_test[index]
             labels = self.y_test[index]
         else:
-            inputs = self.x_train_perm[index] if perm else self.x_train[index]
+            inputs = self.x_train[index]
             labels = self.y_train[index]
         return index, inputs, labels        
 
