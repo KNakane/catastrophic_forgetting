@@ -66,7 +66,7 @@ class Utils():
         stats = []
         for key, info in message.items():
             stats.append("%s = %s" % (key, info))
-        info = "%s\n"%(", ".join(stats))
+        info = "%s"%(", ".join(stats))
         if test:
             with open(self.log_dir + '/test_log.txt', 'a') as f:
                 f.write(str(info))
