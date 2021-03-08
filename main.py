@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 from src.model import CNN, DNN
+from src.rtf import ReplayThroughFeedback
 from src.data import Dataset
 from src.trainer import Trainer
 from collections import OrderedDict
@@ -16,6 +17,8 @@ def find_gpu():
     return -1
 
 def main(args):
+    # check task num
+    assert args.task_num > 0, "Please set task_num > 0"
     # GPU setting
     gpu = find_gpu()
     args.gpu = "/gpu:{}".format(gpu) if gpu >= 0 else "/cpu:0"
@@ -29,6 +32,13 @@ def main(args):
                 out_dim=dataset.output_dim,
                 opt=args.opt,
                 lr=args.lr)
+    """
+    model = ReplayThroughFeedback(name="ReplayThroughFeedback",
+                                  input_shape=dataset.input_shape,
+                                  out_dim=dataset.output_dim,
+                                  opt=args.opt,
+                                  lr=args.lr)
+    """
 
     message = vars(args)
 
@@ -41,8 +51,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_epoch', default=10, type=int, help='Input max epoch')
+    parser.add_argument('--task_num', default=2, type=int, help='Input number of kind of task')
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size')
-    parser.add_argument('--method', default=None, choices=["EWC", "L2"])
+    parser.add_argument('--method', default=None, choices=["EWC", "OnlineEWC", "L2"])
     parser.add_argument('--opt', default='SGD', type=str, choices=['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop'])
     parser.add_argument('--lr', default=0.001, type=float, help='Input learning rate')
     parser.add_argument('--l2_norm', action='store_true', help='L2 normalization or not')
