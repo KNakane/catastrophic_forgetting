@@ -22,7 +22,7 @@ class MyModel(Model):
         self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
         self.l2_regularizer = tf.keras.regularizers.l2(l2_reg_scale) if l2_reg else None
         self._build()
-        self.loss_function = tf.losses.CategoricalCrossentropy()
+        self.loss_function = tf.losses.CategoricalCrossentropy(from_logits=True)
         self.accuracy_functionA = tf.keras.metrics.CategoricalAccuracy()
         self.accuracy_functionB = tf.keras.metrics.CategoricalAccuracy()
         with tf.device("/cpu:0"):
@@ -36,7 +36,10 @@ class MyModel(Model):
         raise NotImplementedError()
 
     def star(self):
-        self.star_val = {n: p.value() for n, p in enumerate(copy.deepcopy(self.trainable_variables))}
+        self.star_val = []
+        for p in self.trainable_variables.copy():
+            self.star_val.append(p.value())
+        #self.star_val = {n: p.value() for n, p in enumerate(self.trainable_variables.copy())}
         return
 
     def test_inference(self, x, trainable=False):
@@ -50,16 +53,38 @@ class MyModel(Model):
             else:
                 old_FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
 
-        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
-        
-        for img, _ in dataset.take(num_batches):
-            with tf.GradientTape() as tape:
-                logits = self.__call__(img, trainable=False)
-                loglikelihoods = tf.nn.log_softmax(logits)
-            grads = tape.gradient(loglikelihoods, self.trainable_variables)
-            for i, g in enumerate(grads):
-                self.FIM[i] += tf.reduce_mean(g**2, axis=0) / num_batches
+        #self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
+        self.FIM = [tf.zeros_like(p.value()) for p in self.trainable_variables]
 
+        for imgs, labels in dataset.take(num_batches):
+            for img, label in zip(imgs, labels):
+                img = tf.expand_dims(img, axis=0)
+                label = tf.expand_dims(label, axis=0)
+                with tf.GradientTape() as tape:
+                    logits = self.__call__(img, trainable=False)
+                    
+                    
+                    #prob = tf.nn.log_softmax(logits)
+                    prob = tf.nn.softmax(logits)
+                    class_ind = tf.random.categorical(tf.math.log(prob), 1, dtype=tf.int32)[0]
+                    #class_ind = tf.argmax(prob, axis=-1, output_type=tf.int32)
+                    loglikelihoods = tf.gather(tf.math.log(prob[0]), class_ind)
+                    #loglikelihoods = tf.multiply(label, prob)
+                    
+                    #loglikelihoods = self.loss_function(label, logits)
+                    
+                    grads = tape.gradient(loglikelihoods, self.trainable_variables)
+                """
+                for i, g in enumerate(grads):
+                    self.FIM[i] += tf.square(g)
+                """
+                for v in range(len(self.FIM)):
+                    self.FIM[v] += np.square(grads[v])
+            break
+        
+        for v in range(len(self.FIM)):
+            self.FIM[v] /= num_batches
+        
         if online:
             for k, v in old_FIM.items():
                 self.FIM[k] += gamma * v
@@ -68,7 +93,7 @@ class MyModel(Model):
     def loss(self, logits, answer, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
         if mode in ["EWC", "OnlineEWC"]:
-            loss += self.ewc_loss(logits, answer, lam=20)
+            loss += self.ewc_loss(logits, answer, lam=25)
         
         elif mode == "L2":
             loss += self.l2_penalty()
@@ -76,11 +101,8 @@ class MyModel(Model):
 
     def ewc_loss(self, logits, answer, lam=25):
         loss = 0
-        for i in range(len(self.FIM)):
-            fisher = self.FIM[i]
-            val = self.trainable_variables[i]
-            star_val = self.star_val[i]
-            loss += lam/2 * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
+        for i, val in enumerate(self.trainable_variables):
+            loss += (0.5 * lam) * tf.reduce_sum(tf.multiply(self.FIM[i], tf.square(val - self.star_val[i])))
         return loss
 
     def l2_penalty(self):
@@ -110,7 +132,7 @@ class CNN(MyModel):
         self.flat = tf.keras.layers.Flatten()
         self.fc1 = tf.keras.layers.Dense(120, activation='relu', kernel_regularizer=self.l2_regularizer)
         self.fc2 = tf.keras.layers.Dense(84, activation='relu', kernel_regularizer=self.l2_regularizer)
-        self.out = tf.keras.layers.Dense(self.out_dim, activation='softmax')
+        self.out = tf.keras.layers.Dense(self.out_dim)
         return
     
     @tf.function
@@ -136,9 +158,9 @@ class DNN(MyModel):
         self.flat = tf.keras.layers.Flatten()
         self.fc1 = tf.keras.layers.Dense(50, activation='relu', kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
                                          bias_initializer=tf.keras.initializers.Ones(), kernel_regularizer=self.l2_regularizer)
-        #self.fc2 = tf.keras.layers.Dense(50, activation='relu', kernel_regularizer=self.l2_regularizer)
+        self.fc2 = tf.keras.layers.Dense(50, activation='relu', kernel_regularizer=self.l2_regularizer)
         self.out = tf.keras.layers.Dense(self.out_dim, kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
-                                         bias_initializer=tf.keras.initializers.Ones(), activation='softmax')
+                                         bias_initializer=tf.keras.initializers.Ones())#, activation='softmax')
         return
     
     @tf.function
@@ -146,6 +168,6 @@ class DNN(MyModel):
         with tf.name_scope(self.name):
             x = self.flat(x, training=trainable)
             x = self.fc1(x, training=trainable)
-            #x = self.fc2(x, training=trainable)
+            x = self.fc2(x, training=trainable)
             x = self.out(x, training=trainable)
             return x
