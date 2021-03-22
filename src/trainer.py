@@ -53,7 +53,7 @@ class Trainer():
         return tf.summary.create_file_writer(self.util.tf_board)
 
     @tf.function
-    def _train_body(self, images, labels, continual=False):
+    def _train_body(self, images, labels, continual=0):
         with tf.device(self.device):
             with tf.GradientTape() as tape:
                 with tf.name_scope('train_logits'):
@@ -62,7 +62,7 @@ class Trainer():
                     if self.name == "ReplayThroughFeedback":
                         loss = self.model.loss(y_pre, images, labels)
                     else:
-                        loss = self.model.loss(y_pre, labels, self.method if continual else None)
+                        loss = self.model.loss(y_pre, labels, self.method if continual > 0 else None)
                     self.train_loss(loss)
             self.model.optimize(loss, tape)
             with tf.name_scope('train_accuracy'):
@@ -70,7 +70,7 @@ class Trainer():
         return
 
     @tf.function
-    def _test_body(self, images, labels, taskB=False):
+    def _test_body(self, images, labels):
         with tf.device(self.device):
             with tf.name_scope('test_logits'):
                 y_pre = self.model(images, trainable=False)
@@ -123,6 +123,8 @@ class Trainer():
             valid_datasets.append(valid_dataset)
             test_datasets.append(test_dataset)
 
+        all_loss = np.zeros((self.n_epoch*self.task_num, self.task_num))
+        all_accuracy = np.zeros((self.n_epoch*self.task_num, self.task_num))
 
         # Graph for tensorboard
         tf.summary.trace_on(graph=True, profiler=True)
@@ -133,7 +135,7 @@ class Trainer():
                 
                     start_time = time.time()
                     for (train_images, train_labels) in train_dataset:
-                        self._train_body(train_images, train_labels, continual=bool(n_task))
+                        self._train_body(train_images, train_labels, continual=n_task)
                     time_per_episode = time.time() - start_time
                     # trainiing metricsを記録
                     train_loss = self.train_loss.result().numpy()
@@ -141,10 +143,6 @@ class Trainer():
                     # 訓練履歴のリセット
                     self.train_loss.reset_states()
                     self.acc_func.reset_states()
-
-                    if self.method in ["EWC", "OnlineEWC"] and epoch == self.n_epoch-1:
-                        self.model.fissher_info(valid_dataset, num_batches=1000, online=self.__online)
-                        self.model.star()
 
                     test_losses, test_accuracy = [], []
                     for test_dataset in test_datasets:
@@ -156,6 +154,9 @@ class Trainer():
                         # 訓練履歴のリセット
                         self.test_loss.reset_states()
                         self.acc_func.reset_states()
+
+                    all_loss[total_epoch-1] = test_losses
+                    all_accuracy[total_epoch-1] = test_accuracy
 
                     # Training results
                     metrics = OrderedDict({
@@ -171,24 +172,33 @@ class Trainer():
                         "test_image" : test_images[:3]
                     })
 
-                    #Accuracy_A.append(test_accuracyA.numpy())
-                    #Accuracy_B.append(test_accuracyB.numpy())
                     total_epoch += 1
                     self.epoch_end(metrics, other_metrics)
-            #self.progress_graph(Accuracy_A, Accuracy_B)
+
+                if self.method in ["EWC", "OnlineEWC"]:
+                    self.model.star()
+                    self.model.fissher_info(valid_dataset, num_batches=1000, online=self.__online)
+            self.progress_graph(all_loss, all_accuracy)
         
         return
 
-    def progress_graph(self, taskA, taskB):
+    def progress_graph(self, loss, accuracy):
         plt.clf()
-        n_epoch = np.arange(len(taskA))
-        # プロット
-        plt.plot(n_epoch, taskA, label="taskA")
-        plt.plot(n_epoch, taskB, label="taskB")
+        n_epoch = np.arange(loss.shape[0]) + 1
+        fig = plt.figure()
 
-        # 凡例の表示
-        plt.legend()
-        plt.grid()
+        # lossに関するグラフ
+        ax1 = fig.add_subplot(2, 1, 1)
+        for i in range(loss.shape[1]):
+            ax1.plot(n_epoch, loss[:,i], label="task{}".format(i+1))
+        ax1.legend()
+        ax1.grid()
+
+        ax2 = fig.add_subplot(2, 1, 2)
+        for i in range(accuracy.shape[1]):
+            ax2.plot(n_epoch, accuracy[:,i], label="task{}".format(i+1))
+        ax2.legend()
+        ax2.grid()
 
         plt.savefig("./progress_{}.png".format(self.method))
         plt.close()
