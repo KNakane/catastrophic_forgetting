@@ -20,6 +20,7 @@ class Trainer():
         self.max_steps = FLAGS.n_epoch
         self.save_checkpoint_steps = self.max_steps / 10 if FLAGS.save_checkpoint_steps is None else FLAGS.save_checkpoint_steps
         self.batch_size = FLAGS.batch_size
+        self.task_num = FLAGS.task_num
         self.name = name
         self.message = message
         self.data = datasets[0]
@@ -52,10 +53,6 @@ class Trainer():
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         self.train_op = tf.group([opt_op] + update_ops)
 
-        self.train_loss_ = self.model.loss(self.train_logits, train_ans, mode=self.method)
-        reopt_op = self.model.optimize(self.train_loss_, self.global_step)
-        self.retrain_op = tf.group([reopt_op] + update_ops)
-
         self.train_accuracy = self.model.evaluate(self.train_logits, train_ans)
 
         # validation
@@ -70,10 +67,27 @@ class Trainer():
 
         return
 
+    def build_retrain(self, train_data, train_ans):
+        self.train_loss_ = self.model.loss(self.train_logits, train_ans, mode=self.method)
+        reopt_op = self.model.optimize(self.train_loss_, self.global_step)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        self.train_op = tf.group([reopt_op] + update_ops)
+        return
+
+
     def build_fissher_info(self, images, labels):
         logits = self.model.inference(images, reuse=True)
-        ll = tf.nn.log_softmax(logits)
-        self.grads = tf.gradients(ll, tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
+        
+        prob = tf.nn.log_softmax(logits)
+        loglikelihoods = tf.multiply(labels, prob)
+        
+        """
+        probs = tf.nn.softmax(logits)
+        class_ind = tf.to_int32(tf.multinomial(tf.log(probs), 1)[0][0])
+        loglikelihoods = tf.log(probs[0,class_ind])
+        """
+
+        self.grads = tf.gradients(loglikelihoods, tf.trainable_variables())
         return
 
 
@@ -139,14 +153,21 @@ class Trainer():
                 print('Not restore init model')
 
 
+            total_step = 1
+            index = 0
+            graph_index = []
+            all_loss = np.zeros((int(self.max_steps*self.task_num/100)+1, self.task_num))
+            all_accuracy = np.zeros((int(self.max_steps*self.task_num/100)+1, self.task_num))
+
             # Training each task
             start = time.time()
             for n_task, data in enumerate(self.datasets):
-                train_op = self.retrain_op if n_task else self.train_op
-                for step in range(1, self.max_steps+1):
+                if n_task:
+                    self.build_retrain(train_inputs, train_labels)
+                for step in range(self.max_steps):
                     iteration_time = time.time()
                     _, x_train, y_train = data.next_batch(batch_size=self.batch_size)
-                    _, train_loss, train_acc = session.run([train_op, self.train_loss, self.train_accuracy],
+                    _, train_loss, train_acc = session.run([self.train_op, self.train_loss, self.train_accuracy],
                                                            feed_dict={
                                                              train_inputs: x_train,
                                                              train_labels: y_train
@@ -154,15 +175,16 @@ class Trainer():
                     iteration_end = time.time() - iteration_time
                     summary_time = session.run(board4time, feed_dict={step_time:iteration_end})
                     #writer.add_summary(summary, step)
-                    writer.add_summary(summary_time, step)
+                    writer.add_summary(summary_time, total_step)
 
-                    if step == 1 or step % 100 == 0:
+                    if total_step == 1 or total_step % 100 == 0:
                         metrics = OrderedDict({
-                            "global_step": step,
+                            "global_step": total_step,
                             "train loss": '{:.3f}'.format(train_loss),
                             "train accuracy":'{:.3f}'.format(train_acc)
                         })
 
+                        test_losses, test_accuracy = [], []
                         for i, test_data in enumerate(self.datasets):
                             _, x_test, y_test = test_data.next_batch(batch_size=10000, test=True)
                             test_loss, test_acc = session.run(
@@ -174,39 +196,54 @@ class Trainer():
                             )
                             metrics["test_loss{}".format(i+1)] = '{:.3f}'.format(test_loss)
                             metrics["test_acc{}".format(i+1)] = '{:.3f}'.format(test_acc)
-
+                            test_losses.append(test_loss)
+                            test_accuracy.append(test_acc)
+                        
+                        graph_index.append(total_step)
+                        all_loss[index] = test_losses
+                        all_accuracy[index] = test_accuracy
+                        index += 1
                     
                         metrics["time_per_epoch"] = '{:.3f}'.format(iteration_end)
 
                         self.util.write_log(message=metrics, cout=True)
-                        saver.save(session, self.util.model_path + '/model', global_step=step)
+                        saver.save(session, self.util.model_path + '/model', global_step=total_step)
+                    
+                    total_step += 1
 
                 # save model parameter
-                valid_num = 1000
-                _, x_valid, y_valid = data.next_batch(batch_size=valid_num, valid=True)
-                gradients = session.run(self.grads, feed_dict={valid_inputs: x_valid, valid_labels: y_valid})
-                self.model.fissher_info(gradients, valid_num)
-                self.model.set_old_val()
+                if self.method == "EWC":
+                    self.model.set_old_val()
+                    valid_num = 200
+                    _, x_valid, y_valid = data.next_batch(batch_size=valid_num, valid=True)
+                    self.model.compute_fissher(session, self.grads, valid_inputs, valid_labels, x_valid, y_valid)
 
 
             elapsed_time = time.time() - start
             print(elapsed_time)
-            #self.progress_graph(Accuracy_A, Accuracy_B)
+            self.progress_graph(graph_index, all_loss, all_accuracy)
             writer.close()
 
         return 
 
-    def progress_graph(self, taskA, taskB):
+    def progress_graph(self, index, loss, accuracy):
         plt.clf()
-        n_epoch = np.arange(len(taskA))
-        # プロット
-        plt.plot(n_epoch, taskA, label="taskA")
-        plt.plot(n_epoch, taskB, label="taskB")
+        fig = plt.figure()
 
-        # 凡例の表示
-        plt.legend()
-        plt.grid()
+        # lossに関するグラフ
+        ax1 = fig.add_subplot(2, 1, 1)
+        for i in range(loss.shape[1]):
+            ax1.plot(index, loss[:,i], label="task{}".format(i+1))
+        ax1.legend()
+        ax1.grid()
 
-        plt.savefig("./progress.png")
+        ax2 = fig.add_subplot(2, 1, 2)
+        for i in range(accuracy.shape[1]):
+            ax2.plot(index, accuracy[:,i], label="task{}".format(i+1))
+        ax2.legend()
+        ax2.grid()
+        ax2.set_ylim(0, 1)
+
+        plt.savefig("./progress_{}.png".format(self.method))
         plt.close()
         return

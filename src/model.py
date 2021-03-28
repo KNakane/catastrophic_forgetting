@@ -2,6 +2,7 @@ import os, sys
 import copy
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from src.optimizer import *
 from tensorflow.keras.models import Model
 
@@ -22,8 +23,6 @@ class MyModel(Model):
         self._l2_reg = l2_reg
         self._l2_reg_scale = tf.contrib.layers.l2_regularizer(scale=l2_reg_scale) if self._l2_reg else None
         self._trainable = trainable
-        self.FIM = []
-        self.old_val = []
         if self._trainable:
             self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
 
@@ -34,26 +33,33 @@ class MyModel(Model):
         raise NotImplementedError()
 
     def set_old_val(self):
-        self.old_val = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        #self.old_val = copy.deepcopy(self.trainable_variables)#.copy()
+        self.old_val = [p.eval() for p in tf.trainable_variables()]
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
 
-    def fissher_info(self, grads, num_samples):
-        self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))}
-        for i, g in enumerate(grads):
-            self.FIM[i] += tf.reduce_mean(g**2, axis=0) / num_samples
-        
-        """
-        for param in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-            self.FIM.append(np.zeros(param.shape))
-        
-        for fim, grad in zip(self.FIM, grads):
-            fim += tf.reduce_mean(tf.square(grad), axis=0) / num_samples
-        """
+    def mnist_imshow(self):
+        F_row_mean = np.mean(self.FIM[0], 1)
+        plt.imshow(F_row_mean.reshape([28,28]), cmap="gray")
+        plt.axis('off')
+        plt.savefig("./FIM.png")
 
+    def compute_fissher(self, session, grads, valid_inputs, valid_labels, imgs, labels, plot_diffs=False):
+        self.FIM = [np.zeros(v.get_shape().as_list()) for v in tf.trainable_variables()]
+        valid_num = imgs.shape[0]
+        for x, y in zip(imgs, labels):
+            gradients = session.run(grads, feed_dict={valid_inputs: x[None,:], valid_labels: y[None,:]})
+            for v in range(len(self.FIM)):
+                self.FIM[v] += np.square(gradients[v])
+            
+                    
+        for v in range(len(self.FIM)):
+            self.FIM[v] /= valid_num
+
+        if plot_diffs:
+            self.mnist_imshow()
+        
         return
 
     def loss(self, logits, answer, mode=None):
@@ -61,26 +67,23 @@ class MyModel(Model):
         if self._l2_reg:
             loss += tf.losses.get_regularization_loss()
         if mode == "EWC":
-            loss += self.ewc_loss(logits, answer, lam=20)
+            loss += self.ewc_loss(logits, answer, lam=15)
         elif mode == "L2":
             loss += self.l2_penalty()
         return loss
 
     def l2_penalty(self):
         penalty = 0
-        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        variables = tf.trainable_variables()
         for i, old_val in enumerate(self.old_val):
             penalty += tf.norm(variables[i] - old_val)
         return 0.5 * penalty
 
     def ewc_loss(self, logits, answer, lam=25):
         loss = 0
-        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        for i in range(len(self.FIM)):
-            fisher = self.FIM[i]
-            val = variables[i]
-            star_val = self.old_val[i]
-            loss += lam/2 * tf.reduce_sum(tf.multiply(tf.cast(fisher, dtype=tf.float32), tf.square(val - star_val)))
+        for v, val in enumerate(tf.trainable_variables()):
+            loss += (lam / 2) * tf.reduce_sum(tf.multiply(self.FIM[v].astype(np.float32),
+            tf.square(val - self.old_val[v])))
         return loss
 
     def optimize(self, loss, global_step=None):
