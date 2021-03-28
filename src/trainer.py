@@ -213,8 +213,8 @@ class Trainer():
                     total_step += 1
 
                 # save model parameter
+                self.model.set_old_val()
                 if self.method in ["EWC", "OnlineEWC"]:
-                    self.model.set_old_val()
                     valid_num = 200
                     _, x_valid, y_valid = data.next_batch(batch_size=valid_num, valid=True)
                     self.model.compute_fissher(session, self.grads, valid_inputs, valid_labels, x_valid, y_valid, online=self.__online)

@@ -85,8 +85,8 @@ class MyModel(Model):
     def l2_penalty(self):
         penalty = 0
         variables = tf.trainable_variables()
-        for i, old_val in enumerate(self.old_val):
-            penalty += tf.norm(variables[i] - old_val)
+        for v, val in enumerate(tf.trainable_variables()):
+            penalty += tf.reduce_mean(tf.square(val - self.old_val[v]))
         return 0.5 * penalty
 
     def ewc_loss(self, logits, answer, lam=25):
