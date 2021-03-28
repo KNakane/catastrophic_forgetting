@@ -28,6 +28,7 @@ class Trainer():
         self.global_step = tf.train.get_or_create_global_step()
         self.model = model
         self.method = FLAGS.method
+        self.__online = True if self.method == "OnlineEWC" else False
         self.restore_dir = FLAGS.init_model
         self.device = FLAGS.gpu
         self.util = Utils(prefix=self.name)
@@ -212,11 +213,11 @@ class Trainer():
                     total_step += 1
 
                 # save model parameter
-                if self.method == "EWC":
+                if self.method in ["EWC", "OnlineEWC"]:
                     self.model.set_old_val()
                     valid_num = 200
                     _, x_valid, y_valid = data.next_batch(batch_size=valid_num, valid=True)
-                    self.model.compute_fissher(session, self.grads, valid_inputs, valid_labels, x_valid, y_valid)
+                    self.model.compute_fissher(session, self.grads, valid_inputs, valid_labels, x_valid, y_valid, online=self.__online)
 
 
             elapsed_time = time.time() - start

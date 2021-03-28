@@ -54,7 +54,7 @@ if __name__ == "__main__":
     flags.DEFINE_integer('n_epoch', 1000, 'Input max epoch')
     flags.DEFINE_integer('batch_size', 32, 'Input batch size')
     flags.DEFINE_integer('task_num', 2, 'Input number of kind of task')
-    flags.DEFINE_string('method', None, "[EWC, L2]")
+    flags.DEFINE_string('method', None, "[EWC, OnlineEWC, L2]")
     flags.DEFINE_string('opt', 'SGD', "['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop']")
     flags.DEFINE_float('lr', 0.001, 'Input learning rate')
     flags.DEFINE_bool('l2_norm', False, 'L2 normalization or not')

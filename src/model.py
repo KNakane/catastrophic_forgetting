@@ -45,7 +45,13 @@ class MyModel(Model):
         plt.axis('off')
         plt.savefig("./FIM.png")
 
-    def compute_fissher(self, session, grads, valid_inputs, valid_labels, imgs, labels, plot_diffs=False):
+    def compute_fissher(self, session, grads, valid_inputs, valid_labels, imgs, labels, online=False, gamma=1, plot_diffs=False):
+        if online:
+            if hasattr(self, 'FIM'):
+                old_FIM = copy.deepcopy(self.FIM)
+            else:
+                old_FIM = [np.zeros(v.get_shape().as_list()) for v in tf.trainable_variables()]
+        
         self.FIM = [np.zeros(v.get_shape().as_list()) for v in tf.trainable_variables()]
         valid_num = imgs.shape[0]
         for x, y in zip(imgs, labels):
@@ -57,6 +63,10 @@ class MyModel(Model):
         for v in range(len(self.FIM)):
             self.FIM[v] /= valid_num
 
+        if online:
+            for k, v in enumerate(old_FIM):
+                self.FIM[k] += gamma * v
+
         if plot_diffs:
             self.mnist_imshow()
         
@@ -66,7 +76,7 @@ class MyModel(Model):
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=answer))
         if self._l2_reg:
             loss += tf.losses.get_regularization_loss()
-        if mode == "EWC":
+        if mode in ["EWC", "OnlineEWC"]:
             loss += self.ewc_loss(logits, answer, lam=15)
         elif mode == "L2":
             loss += self.l2_penalty()
