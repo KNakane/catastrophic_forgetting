@@ -199,6 +199,7 @@ class Trainer():
             ax2.plot(n_epoch, accuracy[:,i], label="task{}".format(i+1))
         ax2.legend()
         ax2.grid()
+        ax2.set_ylim(0, 1)
 
         plt.savefig("./progress_{}.png".format(self.method))
         plt.close()

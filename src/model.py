@@ -3,6 +3,7 @@ import copy
 import numpy as np
 import tensorflow as tf
 from src.optimizer import *
+import matplotlib.pyplot as plt
 from tensorflow.keras.models import Model
 
 class MyModel(Model):
@@ -36,14 +37,17 @@ class MyModel(Model):
         raise NotImplementedError()
 
     def star(self):
-        self.star_val = []
-        for p in self.trainable_variables.copy():
-            self.star_val.append(p.value())
-        #self.star_val = {n: p.value() for n, p in enumerate(self.trainable_variables.copy())}
+        self.star_val = [p.value() for p in self.trainable_variables]
         return
 
     def test_inference(self, x, trainable=False):
         return self.__call__(x, trainable=trainable)
+
+    def mnist_imshow(self):
+        F_row_mean = np.mean(self.FIM[0], 1)
+        plt.imshow(F_row_mean.reshape([28,28]), cmap="gray")
+        plt.axis('off')
+        plt.savefig("./FIM.png")
 
     def fissher_info(self, dataset, num_batches=1, online=False, gamma=1):
         # cite: https://seanmoriarity.com/2020/10/18/continual-learning-with-ewc/
@@ -51,10 +55,9 @@ class MyModel(Model):
             if hasattr(self, 'FIM'):
                 old_FIM = copy.deepcopy(self.FIM)
             else:
-                old_FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
+                old_FIM = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
 
-        #self.FIM = {n: tf.zeros_like(p.value()) for n, p in enumerate(self.trainable_variables)}
-        self.FIM = [tf.zeros_like(p.value()) for p in self.trainable_variables]
+        self.FIM = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
 
         for imgs, labels in dataset.take(num_batches):
             for img, label in zip(imgs, labels):
@@ -64,36 +67,35 @@ class MyModel(Model):
                     logits = self.__call__(img, trainable=False)
                     
                     
-                    #prob = tf.nn.log_softmax(logits)
-                    prob = tf.nn.softmax(logits)
-                    class_ind = tf.random.categorical(tf.math.log(prob), 1, dtype=tf.int32)[0]
+                    prob = tf.nn.log_softmax(logits)
+                    loglikelihoods = tf.multiply(label, prob)
+                    #prob = tf.nn.softmax(logits)
+                    #class_ind = tf.random.categorical(tf.math.log(prob), 1, dtype=tf.int32)[0]
                     #class_ind = tf.argmax(prob, axis=-1, output_type=tf.int32)
-                    loglikelihoods = tf.gather(tf.math.log(prob[0]), class_ind)
-                    #loglikelihoods = tf.multiply(label, prob)
+                    #loglikelihoods = tf.gather(tf.math.log(prob[0]), class_ind)
                     
                     #loglikelihoods = self.loss_function(label, logits)
                     
                     grads = tape.gradient(loglikelihoods, self.trainable_variables)
-                """
-                for i, g in enumerate(grads):
-                    self.FIM[i] += tf.square(g)
-                """
-                for v in range(len(self.FIM)):
-                    self.FIM[v] += np.square(grads[v])
+                
+                for v, grad in enumerate(grads):
+                    self.FIM[v] += np.square(grad)
             break
         
         for v in range(len(self.FIM)):
             self.FIM[v] /= num_batches
+
+        # self.mnist_imshow()
         
         if online:
-            for k, v in old_FIM.items():
+            for k, v in enumerate(old_FIM):
                 self.FIM[k] += gamma * v
         return
 
     def loss(self, logits, answer, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
         if mode in ["EWC", "OnlineEWC"]:
-            loss += self.ewc_loss(logits, answer, lam=25)
+            loss += self.ewc_loss(logits, answer, lam=15)
         
         elif mode == "L2":
             loss += self.l2_penalty()
@@ -102,7 +104,7 @@ class MyModel(Model):
     def ewc_loss(self, logits, answer, lam=25):
         loss = 0
         for i, val in enumerate(self.trainable_variables):
-            loss += (0.5 * lam) * tf.reduce_sum(tf.multiply(self.FIM[i], tf.square(val - self.star_val[i])))
+            loss += (0.5 * lam) * tf.reduce_sum(tf.multiply(tf.cast(self.FIM[i], tf.float32), tf.square(val - self.star_val[i])))
         return loss
 
     def l2_penalty(self):
