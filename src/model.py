@@ -77,7 +77,7 @@ class MyModel(Model):
         if self._l2_reg:
             loss += tf.losses.get_regularization_loss()
         if mode in ["EWC", "OnlineEWC"]:
-            loss += self.ewc_loss(logits, answer, lam=15)
+            loss += self.ewc_loss(logits, answer, lam=20)
         elif mode == "L2":
             loss += self.l2_penalty()
         return loss
