@@ -20,6 +20,7 @@ class MyModel(Model):
         self.model_name = name
         self._input_shape = input_shape
         self.out_dim = out_dim
+        self.lr = lr
         self.optimizer = eval(opt)(learning_rate=lr, decay_step=None, decay_rate=0.95)
         self.l2_regularizer = tf.keras.regularizers.l2(l2_reg_scale) if l2_reg else None
         self._build()
@@ -69,13 +70,6 @@ class MyModel(Model):
                     
                     prob = tf.nn.log_softmax(logits)
                     loglikelihoods = tf.multiply(label, prob)
-                    #prob = tf.nn.softmax(logits)
-                    #class_ind = tf.random.categorical(tf.math.log(prob), 1, dtype=tf.int32)[0]
-                    #class_ind = tf.argmax(prob, axis=-1, output_type=tf.int32)
-                    #loglikelihoods = tf.gather(tf.math.log(prob[0]), class_ind)
-                    
-                    #loglikelihoods = self.loss_function(label, logits)
-                    
                     grads = tape.gradient(loglikelihoods, self.trainable_variables)
                 
                 for v, grad in enumerate(grads):
@@ -92,10 +86,29 @@ class MyModel(Model):
                 self.FIM[k] += gamma * v
         return
 
-    def loss(self, logits, answer, mode=None):
+    def omega_info(self, xi=0.1):
+        # https://github.com/spiglerg/TF_ContinualLearningViaSynapticIntelligence/blob/master/permuted_mnist.py
+        if not hasattr(self, 'omega'):
+            self.omega = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+
+        if not hasattr(self, 'OMEGA'):
+            self.OMEGA = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+
+        for i, val in enumerate(self.trainable_variables):
+            self.OMEGA[i] += self.omega[i] / (np.square(val - self.star_val[i]) + xi)
+
+        self.omega = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+        return
+
+    def loss(self, logits, answer, tape=None, mode=None):
         loss = self.loss_function(y_true=answer, y_pred=logits)
         if mode in ["EWC", "OnlineEWC"]:
             loss += self.ewc_loss(logits, answer, lam=15)
+
+        elif mode == "SI":
+            assert tape is not None
+            grads = tape.gradient(loss, self.trainable_variables)
+            loss += self.synaptic_intelligence(grads)
         
         elif mode == "L2":
             loss += self.l2_penalty()
@@ -112,6 +125,15 @@ class MyModel(Model):
         for i, theta_i in enumerate(self.trainable_variables):
             penalty += tf.reduce_sum((theta_i - self.star_val[i]) ** 2)
         return 0.5 * penalty
+
+    def synaptic_intelligence(self, grads, c=0.1):
+        penalty = 0
+        for i, grad in enumerate(grads):
+            self.omega[i] += self.lr * grad
+
+        for i, theta_i in enumerate(self.trainable_variables):
+            penalty += tf.reduce_sum(self.OMEGA[i] * (theta_i - self.star_val[i]) ** 2)
+        return c * penalty
 
     def optimize(self, loss, tape=None):
         assert tape is not None, 'please set tape in opmize'

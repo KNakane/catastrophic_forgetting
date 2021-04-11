@@ -55,14 +55,14 @@ class Trainer():
     @tf.function
     def _train_body(self, images, labels, continual=0):
         with tf.device(self.device):
-            with tf.GradientTape() as tape:
+            with tf.GradientTape(persistent=True) as tape:
                 with tf.name_scope('train_logits'):
                     y_pre = self.model(images)
                 with tf.name_scope('train_loss'):
                     if self.name == "ReplayThroughFeedback":
                         loss = self.model.loss(y_pre, images, labels)
                     else:
-                        loss = self.model.loss(y_pre, labels, self.method if continual > 0 else None)
+                        loss = self.model.loss(y_pre, labels, tape, self.method if continual > 0 else None)
                     self.train_loss(loss)
             self.model.optimize(loss, tape)
             with tf.name_scope('train_accuracy'):
@@ -175,9 +175,12 @@ class Trainer():
                     total_epoch += 1
                     self.epoch_end(metrics, other_metrics)
 
-                if self.method in ["EWC", "OnlineEWC"]:
+                if self.method is not None:
                     self.model.star()
+                if self.method in ["EWC", "OnlineEWC"]:
                     self.model.fissher_info(valid_dataset, num_batches=1000, online=self.__online)
+                if self.method in ["SI"]:
+                    self.model.omega_info()
             self.progress_graph(all_loss, all_accuracy)
         
         return

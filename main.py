@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_epoch', default=10, type=int, help='Input max epoch')
     parser.add_argument('--task_num', default=2, type=int, help='Input number of kind of task')
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size')
-    parser.add_argument('--method', default=None, choices=["EWC", "OnlineEWC", "L2"])
+    parser.add_argument('--method', default=None, choices=["EWC", "OnlineEWC", "SI", "L2"])
     parser.add_argument('--opt', default='SGD', type=str, choices=['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop'])
     parser.add_argument('--lr', default=0.001, type=float, help='Input learning rate')
     parser.add_argument('--l2_norm', action='store_true', help='L2 normalization or not')
