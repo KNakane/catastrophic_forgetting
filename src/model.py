@@ -96,6 +96,17 @@ class MyModel(Model):
             tf.square(val - self.old_val[v])))
         return loss
 
+    def synaptic_intelligence(self):
+        loss = 0
+        for v, val in enumerate(tf.trainable_variables()):
+            loss += tf.reduce_sum(
+                tf.multiply(
+                    big_omega_var[v],
+                    tf.square(val - self.old_val[v])
+                )
+            )
+        return loss
+
     def optimize(self, loss, global_step=None):
         return self.optimizer.optimize(loss=loss, global_step=global_step)
 
