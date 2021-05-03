@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.client import device_lib
-from src.model import CNN, DNN
+from src.model import CNN, DNN, HyperNetworks
 from src.rtf import ReplayThroughFeedback
 from src.data import Dataset
 from src.trainer import Trainer
@@ -27,11 +27,20 @@ def main(args):
     dataset = Dataset(name='mnist')
 
     # model
-    model = DNN(name='DNN',
-                input_shape=dataset.input_shape,
-                out_dim=dataset.output_dim,
-                opt=args.opt,
-                lr=args.lr)
+    if args.method == "HyperNet":
+        model = HyperNetworks(name='HyperNetworks',
+                              input_shape=dataset.input_shape,
+                              out_dim=dataset.output_dim,
+                              opt=args.opt,
+                              lr=args.lr,
+                              n_chunks=10,
+                              embedding_dim=args.emb_dim)
+    else:
+        model = DNN(name='DNN',
+                    input_shape=dataset.input_shape,
+                    out_dim=dataset.output_dim,
+                    opt=args.opt,
+                    lr=args.lr)
     """
     model = ReplayThroughFeedback(name="ReplayThroughFeedback",
                                   input_shape=dataset.input_shape,
@@ -53,10 +62,11 @@ if __name__ == "__main__":
     parser.add_argument('--n_epoch', default=10, type=int, help='Input max epoch')
     parser.add_argument('--task_num', default=2, type=int, help='Input number of kind of task')
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size')
-    parser.add_argument('--method', default=None, choices=["EWC", "OnlineEWC", "SI", "L2"])
+    parser.add_argument('--method', default=None, choices=["EWC", "OnlineEWC", "SI", "L2", "HyperNet"])
     parser.add_argument('--opt', default='SGD', type=str, choices=['SGD','Momentum','Adadelta','Adagrad','Adam','RMSprop'])
     parser.add_argument('--lr', default=0.001, type=float, help='Input learning rate')
     parser.add_argument('--l2_norm', action='store_true', help='L2 normalization or not')
+    parser.add_argument('--emb_dim', default=50, type=int, help='Embedding dim')
     parser.add_argument('--init_model', default=None, type=str, help='Choice the checkpoint directpry(ex. ./results/181225_193106/model)')
     parser.add_argument('--checkpoints_to_keep', default=5, type=int, help='checkpoint keep count')
     parser.add_argument('--keep_checkpoint_every_n_hours', default=1, type=int, help='checkpoint create hour')

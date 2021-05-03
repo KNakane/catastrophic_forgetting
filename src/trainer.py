@@ -21,6 +21,7 @@ class Trainer():
         self.task_num = args.task_num
         self.method = args.method
         self.__online = True if self.method == "OnlineEWC" else False
+        self.embedding_dim = args.emb_dim
         self.n_epoch = args.n_epoch
         self.save_checkpoint_steps = self.n_epoch / 10 if args.save_checkpoint_steps is None else args.save_checkpoint_steps
         self.checkpoints_to_keep = args.checkpoints_to_keep
@@ -57,23 +58,42 @@ class Trainer():
         with tf.device(self.device):
             with tf.GradientTape(persistent=True) as tape:
                 with tf.name_scope('train_logits'):
-                    y_pre = self.model(images)
+                    y_pre = self.model(images, trainable=True)
                 with tf.name_scope('train_loss'):
                     if self.name == "ReplayThroughFeedback":
                         loss = self.model.loss(y_pre, images, labels)
                     else:
                         loss = self.model.loss(y_pre, labels, tape, self.method if continual > 0 else None)
                     self.train_loss(loss)
-            self.model.optimize(loss, tape)
+            self.model.optimize(loss, tape)#, other_variables=tokens[-1])
             with tf.name_scope('train_accuracy'):
                 self.acc_func(y_true=labels, y_pred=y_pre)
         return
 
     @tf.function
-    def _test_body(self, images, labels):
+    def _train_hnet_body(self, images, labels, tokens=None, continual=0):
+        with tf.device(self.device):
+            with tf.GradientTape() as tape:
+                with tf.name_scope('train_logits'):
+                    y_pre = self.model(images, tokens[-1], trainable=True)
+                with tf.name_scope('train_loss'):
+                    weights = [self.model.hnet(token) for token in tokens]
+                    loss = self.model.loss(y_pre, labels, tape, self.method, weights)
+                    self.train_loss(loss)
+            self.model.optimize(loss, tape)#, other_variables=tokens[-1])
+            with tf.name_scope('train_accuracy'):
+                self.acc_func(y_true=labels, y_pred=y_pre)
+
+        return
+
+    @tf.function
+    def _test_body(self, images, labels, token=None):
         with tf.device(self.device):
             with tf.name_scope('test_logits'):
-                y_pre = self.model(images, trainable=False)
+                if self.method == "HyperNet":
+                    y_pre = self.model(images, token, trainable=False)
+                else:
+                    y_pre = self.model(images, trainable=False)
             with tf.name_scope('test_loss'):
                 if self.name == "ReplayThroughFeedback":
                     loss = self.model.loss(y_pre, images, labels)
@@ -113,10 +133,23 @@ class Trainer():
         board_writer = self.begin_train()
 
         if self.restore_dir is not None:
-            self.util.restore_agent(self.model ,self.restore_dir)
-        
+            self.util.restore_agent(self.model, self.restore_dir)
+
+        # load dataset
         train_dataset, valid_dataset, test_dataset = self.load()
         train_datasets, valid_datasets, test_datasets = [train_dataset], [valid_dataset], [test_dataset]
+
+        # task embedding
+        task_embedding = []
+        for i in range(self.task_num):
+            if self.method == "HyperNet":
+                embed = tf.random.normal([self.embedding_dim]) / 10
+                embed = tf.Variable(embed, trainable=True)
+                task_embedding.append(embed)
+            else:
+                task_embedding.append(None)
+
+
         for _ in range(self.task_num - 1):
             train_dataset, valid_dataset, test_dataset = self.load(perm=True)
             train_datasets.append(train_dataset)
@@ -131,11 +164,19 @@ class Trainer():
         with board_writer.as_default():
             total_epoch = 1
             for n_task, (train_dataset, valid_dataset) in enumerate(zip(train_datasets, valid_datasets)):
+
                 for epoch in range(self.n_epoch):
-                
                     start_time = time.time()
                     for (train_images, train_labels) in train_dataset:
-                        self._train_body(train_images, train_labels, continual=n_task)
+                        if self.method == "HyperNet":
+                            self._train_hnet_body(train_images,
+                                                  train_labels,
+                                                  task_embedding[:n_task+1],
+                                                  continual=n_task)
+                        else:
+                            self._train_body(train_images,
+                                             train_labels,
+                                             continual=n_task)
                     time_per_episode = time.time() - start_time
                     # trainiing metricsを記録
                     train_loss = self.train_loss.result().numpy()
@@ -145,9 +186,9 @@ class Trainer():
                     self.acc_func.reset_states()
 
                     test_losses, test_accuracy = [], []
-                    for test_dataset in test_datasets:
+                    for test_task, test_dataset in enumerate(test_datasets):
                         for (test_images, test_labels) in test_dataset:
-                            self._test_body(test_images, test_labels)
+                            self._test_body(test_images, test_labels, task_embedding[test_task])
                         # test lossを記録
                         test_losses.append(self.test_loss.result().numpy())
                         test_accuracy.append(self.acc_func.result().numpy())
@@ -181,6 +222,10 @@ class Trainer():
                     self.model.fissher_info(valid_dataset, num_batches=1000, online=self.__online)
                 if self.method in ["SI"]:
                     self.model.omega_info()
+                if self.method in ["HyperNet"]:
+                    weights = [self.model.hnet(token) for token in task_embedding[:n_task+1]]
+                    self.model.set_weights_snapshots(weights)
+
             self.progress_graph(all_loss, all_accuracy)
         
         return
