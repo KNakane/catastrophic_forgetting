@@ -1,5 +1,6 @@
 import os, sys
 import time
+import copy
 import numpy as np
 import tensorflow as tf
 from src.utils import Utils
@@ -71,6 +72,27 @@ class Trainer():
         return
 
     @tf.function
+    def _train_lwf_body(self, images, labels, prev_model=None, continual=0):
+        with tf.device(self.device):
+            with tf.GradientTape(persistent=True) as tape:
+                with tf.name_scope('train_logits'):
+                    y_pre = self.model(images, trainable=True)
+                    y_pres = tf.split(value=y_pre, num_or_size_splits=self.task_num, axis=1)
+                    y_pre = y_pres.pop(continual)
+                with tf.name_scope('train_loss'):
+                    loss = self.model.loss(y_pre, labels)
+
+                if prev_model is not None:
+                    with tf.name_scope('old_logits'):
+                        target_logits = tf.split(value=prev_model(images), num_or_size_splits=self.task_num, axis=1)
+                        loss += self.model.lwf_loss(y_pres, target_logits)
+                self.train_loss(loss)
+            self.model.optimize(loss, tape)
+            with tf.name_scope('train_accuracy'):
+                self.acc_func(y_true=labels, y_pred=y_pre)
+        return
+
+    @tf.function
     def _train_hnet_body(self, images, labels, tokens=None, continual=0):
         with tf.device(self.device):
             with tf.GradientTape() as tape:
@@ -87,11 +109,15 @@ class Trainer():
         return
 
     @tf.function
-    def _test_body(self, images, labels, token=None):
+    def _test_body(self, images, labels, task_num=0, token=None):
         with tf.device(self.device):
             with tf.name_scope('test_logits'):
                 if self.method == "HyperNet":
                     y_pre = self.model(images, token, trainable=False)
+                elif self.method == "LwF":
+                    y_pre = self.model(images, trainable=False)
+                    y_pres = tf.split(value=y_pre, num_or_size_splits=self.task_num, axis=1)
+                    y_pre = y_pres.pop(task_num)
                 else:
                     y_pre = self.model(images, trainable=False)
             with tf.name_scope('test_loss'):
@@ -135,6 +161,9 @@ class Trainer():
         if self.restore_dir is not None:
             self.util.restore_agent(self.model, self.restore_dir)
 
+        # previous model for LwF(update in Line 259)
+        prev_model = None
+
         # load dataset
         train_dataset, valid_dataset, test_dataset = self.load()
         train_datasets, valid_datasets, test_datasets = [train_dataset], [valid_dataset], [test_dataset]
@@ -173,6 +202,12 @@ class Trainer():
                                                   train_labels,
                                                   task_embedding[:n_task+1],
                                                   continual=n_task)
+                        elif self.method == "LwF":
+                            self._train_lwf_body(train_images,
+                                                 train_labels,
+                                                 prev_model=prev_model,
+                                                 continual=n_task)
+
                         else:
                             self._train_body(train_images,
                                              train_labels,
@@ -188,7 +223,7 @@ class Trainer():
                     test_losses, test_accuracy = [], []
                     for test_task, test_dataset in enumerate(test_datasets):
                         for (test_images, test_labels) in test_dataset:
-                            self._test_body(test_images, test_labels, task_embedding[test_task])
+                            self._test_body(test_images, test_labels, test_task, task_embedding[test_task])
                         # test lossを記録
                         test_losses.append(self.test_loss.result().numpy())
                         test_accuracy.append(self.acc_func.result().numpy())
@@ -225,6 +260,9 @@ class Trainer():
                 if self.method in ["HyperNet"]:
                     weights = [self.model.hnet(token) for token in task_embedding[:n_task+1]]
                     self.model.set_weights_snapshots(weights)
+                if self.method in ["LwF"]:
+                    prev_model = copy.deepcopy(self.model)
+                    #self.model.add_layer(new_class_num=self.data.output_dim)
 
             self.progress_graph(all_loss, all_accuracy)
         

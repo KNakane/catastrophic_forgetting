@@ -50,6 +50,9 @@ class MyModel(Model):
     def set_layer_weights(self, weights):
         raise NotImplementedError()
 
+    def add_layer(self, new_class_num):
+        raise NotImplementedError()
+
     def star(self):
         self.star_val = [p.value() for p in self.trainable_variables]
         return
@@ -127,12 +130,16 @@ class MyModel(Model):
         
         elif mode == "L2":
             loss += self.l2_penalty()
+
+        if self.l2_regularizer is not None:
+            loss += sum(self.losses)
+
         return loss
 
     def l2_penalty(self):
         penalty = 0
         for i, theta_i in enumerate(self.trainable_variables):
-            penalty += tf.reduce_sum((theta_i - self.star_val[i]) ** 2)
+            penalty += tf.reduce_mean(tf.square(theta_i - self.star_val[i]))
         return 0.5 * penalty
 
     def ewc_loss(self, lam=25):
@@ -166,6 +173,14 @@ class MyModel(Model):
             for weight, weight_snapshot in zip(weights, self.weights_snapshots):
                 l2 = tf.reduce_sum(tf.square(weight - weight_snapshot))
                 loss += beta * l2 / n_tasks
+        return loss
+
+    def lwf_loss(self, y_olds, old_labels, T=2):
+        loss = 0
+        for y_old, old_label in zip(y_olds, old_labels):
+            logit = tf.nn.log_softmax(y_old/T, axis=1)
+            label = tf.nn.softmax(old_label/T, axis=1)
+            loss += -tf.reduce_mean(tf.reduce_sum(logit * label, axis=1))
         return loss
 
     def optimize(self, loss, tape=None, other_variables=None,):
@@ -227,7 +242,7 @@ class DNN(MyModel):
         self.out = tf.keras.layers.Dense(self.out_dim, kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
                                          bias_initializer=tf.keras.initializers.Ones())#, activation='softmax')
 
-        self._layer_list = [self.fc1, self.fc2, self.out]
+        self._output_layer_list = [self.out]
         return
     
     @tf.function
@@ -238,6 +253,13 @@ class DNN(MyModel):
             x = self.fc2(x, training=trainable)
             x = self.out(x, training=trainable)
             return x
+
+    def add_layer(self, new_class_num):
+        out = tf.keras.layers.Dense(new_class_num,
+                                    kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.1),
+                                    bias_initializer=tf.keras.initializers.Ones())
+        self._output_layer_list.append(out)
+        return
 
 class HyperNetworks(MyModel):
     def __init__(self, n_chunks=10, embedding_dim=50, **kwargs):
@@ -268,10 +290,9 @@ class HyperNetworks(MyModel):
         param_num = sum(self.param_split)
 
         # Network for Weight of Inference Network
-        self.h_fc1 = tf.keras.layers.Dense(200, activation='relu')
-        self.h_fc2 = tf.keras.layers.Dense(250, activation='relu')
-        self.h_fc3 = tf.keras.layers.Dense(350, activation='relu')
-        self.h_fc4 = tf.keras.layers.Dense(param_num, activation='tanh')
+        self.h_fc1 = tf.keras.layers.Dense(100, activation='relu')
+        self.h_fc2 = tf.keras.layers.Dense(100, activation='relu')
+        self.h_fc3 = tf.keras.layers.Dense(param_num, activation='tanh')
 
 
     @tf.function
@@ -297,7 +318,6 @@ class HyperNetworks(MyModel):
         x = self.h_fc1(x, training=trainable)
         x = self.h_fc2(x, training=trainable)
         x = self.h_fc3(x, training=trainable)
-        x = self.h_fc4(x, training=trainable)
         return x
 
 
