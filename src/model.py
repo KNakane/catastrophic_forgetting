@@ -104,12 +104,12 @@ class MyModel(Model):
     def omega_info(self, xi=0.1):
         # https://github.com/spiglerg/TF_ContinualLearningViaSynapticIntelligence/blob/master/permuted_mnist.py
         if not hasattr(self, 'OMEGA'):
-            self.OMEGA = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+            self.OMEGA = [tf.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
         else:
             for i, val in enumerate(self.trainable_variables):
                 self.OMEGA[i] += self.omega[i] / (tf.square(val - self.star_val[i]) + xi)
 
-        self.omega = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+        self.omega = [tf.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
 
         return
 
@@ -121,9 +121,6 @@ class MyModel(Model):
         loss = self.loss_function(y_true=answer, y_pred=logits)
         if mode in ["EWC", "OnlineEWC"]:
             loss += self.ewc_loss(lam=15)
-
-        elif mode == "SI":
-            loss += self.synaptic_intelligence(tape, loss)
 
         elif mode == "HyperNet":
             loss += self.hypernetwork_loss(weights)
@@ -148,22 +145,10 @@ class MyModel(Model):
             loss += (0.5 * lam) * tf.reduce_sum(tf.multiply(tf.cast(self.FIM[i], tf.float32), tf.square(val - self.star_val[i])))
         return loss
 
-    def synaptic_intelligence(self, tape, loss, c=0.1):
+    def synaptic_intelligence(self, c=0.1):
         penalty = 0
-        # 2. Collect the gradients without regularization term
-        assert tape is not None
-        grads_cross = tape.gradient(loss, self.trainable_variables)
-
-        # 3. Normal update with regularization
         for i, theta_i in enumerate(self.trainable_variables):
-            penalty += tf.reduce_sum(self.OMEGA[i] * (theta_i - self.star_val[i]) ** 2)
-
-        _loss = loss + penalty
-        grads_all = tape.gradient(_loss, self.trainable_variables)
-
-        for i, (grad_cross, grad_all) in enumerate(zip(grads_cross, grads_all)):
-            self.omega[i] += self.lr * grad_cross * grad_all
-
+            penalty += tf.reduce_sum(self.OMEGA[i] * tf.square(theta_i - self.star_val[i]))
         return c * penalty
 
     def hypernetwork_loss(self, weights, beta=0.1):

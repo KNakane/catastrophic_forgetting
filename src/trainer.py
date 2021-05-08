@@ -65,11 +65,35 @@ class Trainer():
                         loss = self.model.loss(y_pre, images, labels)
                     else:
                         loss = self.model.loss(y_pre, labels, tape, self.method if continual > 0 else None)
-                    self.train_loss(loss)
+                self.train_loss(loss)
             self.model.optimize(loss, tape)#, other_variables=tokens[-1])
             with tf.name_scope('train_accuracy'):
                 self.acc_func(y_true=labels, y_pred=y_pre)
         return
+
+    @tf.function
+    def _train_si_body(self, images, labels, continual=0):
+        with tf.device(self.device):
+            with tf.GradientTape(persistent=True) as tape:
+                with tf.name_scope('train_logits'):
+                    y_pre = self.model(images, trainable=True)
+                with tf.name_scope('train_loss'):
+                    loss = self.model.loss(y_pre, labels)
+
+                with tf.name_scope('total_loss'):
+                     total_loss = loss + self.model.synaptic_intelligence()
+
+        self.train_loss(total_loss)
+
+        with tf.name_scope('gradient'):
+            grads = tape.gradient(loss, self.model.trainable_variables)
+        with tf.name_scope('reg_gradient'):
+            reg_grads = tape.gradient(total_loss, self.model.trainable_variables)
+        self.model.optimize(total_loss, tape)
+
+        with tf.name_scope('train_accuracy'):
+            self.acc_func(y_true=labels, y_pred=y_pre)
+        return grads, reg_grads
 
     @tf.function
     def _train_lwf_body(self, images, labels, prev_model=None, continual=0):
@@ -164,6 +188,11 @@ class Trainer():
         # previous model for LwF(update in Line 259)
         prev_model = None
 
+        # init OMEGA
+        if self.method == "SI":
+            self.model.star()
+            self.model.omega_info()
+
         # load dataset
         train_dataset, valid_dataset, test_dataset = self.load()
         train_datasets, valid_datasets, test_datasets = [train_dataset], [valid_dataset], [test_dataset]
@@ -202,6 +231,15 @@ class Trainer():
                                                   train_labels,
                                                   task_embedding[:n_task+1],
                                                   continual=n_task)
+                        elif self.method == "SI":
+                            grads, reg_grads = self._train_si_body(train_images,
+                                                                   train_labels,
+                                                                   continual=n_task)
+
+                            for i, (grad_cross, grad_all) in enumerate(zip(grads, reg_grads)):
+                                self.model.omega[i] += self.model.lr * grad_cross * grad_all
+
+
                         elif self.method == "LwF":
                             self._train_lwf_body(train_images,
                                                  train_labels,
