@@ -6,6 +6,7 @@ import tensorflow as tf
 from src.utils import Utils
 from collections import OrderedDict
 import matplotlib.pyplot as plt
+from cpprb import ReplayBuffer
 
 
 class Trainer():
@@ -23,6 +24,7 @@ class Trainer():
         self.method = args.method
         self.__online = True if self.method == "OnlineEWC" else False
         self.embedding_dim = args.emb_dim
+        self._mem_size = 25
         self.n_epoch = args.n_epoch
         self.save_checkpoint_steps = self.n_epoch / 10 if args.save_checkpoint_steps is None else args.save_checkpoint_steps
         self.checkpoints_to_keep = args.checkpoints_to_keep
@@ -94,6 +96,61 @@ class Trainer():
         with tf.name_scope('train_accuracy'):
             self.acc_func(y_true=labels, y_pred=y_pre)
         return grads, reg_grads
+
+    @tf.function
+    def _train_agem_body(self, images, labels, episodic_images, episodic_lables, continual=0):
+        # https://www.slideshare.net/YuMaruyama/efficient-lifelong-learning-with-agem-iclr-2019-in-20190602-148340566
+        # https://github.com/facebookresearch/agem/blob/master/fc_permute_mnist.py
+        with tf.device(self.device):
+            with tf.GradientTape(persistent=True) as tape:
+                with tf.name_scope('train_logits'):
+                    y_pre = self.model(images, trainable=True)
+                    if continual:
+                        y_ref = self.model(episodic_images, trainable=True)
+                with tf.name_scope('train_loss'):
+                    loss = self.model.loss(y_pre, labels)
+                    if continual:
+                        loss_ref = self.model.loss(y_ref, episodic_lables)
+
+        if continual:
+            grads = tf.gradients(loss, self.model.trainable_variables)
+            grads_ref = tf.gradients(loss_ref, self.model.trainable_variables)
+            grads = self.model.agem_loss(grads, grads_ref)
+
+            self.model.agem_optimize(grads)
+        else:
+            self.model.optimize(loss, tape)
+
+        self.train_loss(loss)
+
+        with tf.name_scope('train_accuracy'):
+            self.acc_func(y_true=labels, y_pred=y_pre)
+        return
+
+    @tf.function
+    def _train_er_body(self, images, labels, episodic_images, episodic_lables, continual=0):
+        if continual:
+            train_imgs = tf.concat([images, episodic_images], axis=0)
+            train_labels = tf.concat([labels, episodic_lables], axis=0)
+        else:
+            train_imgs, train_labels = images, labels
+
+        with tf.device(self.device):
+            with tf.GradientTape() as tape:
+                with tf.name_scope('train_logits'):
+                    y_pre = self.model(train_imgs, trainable=True)
+
+                with tf.name_scope('train_loss'):
+                    loss = self.model.loss(y_pre, train_labels)
+
+            self.train_loss(loss)
+
+            self.model.optimize(loss, tape)
+
+            with tf.name_scope('train_accuracy'):
+                y_pre = self.model(images, trainable=True)
+                self.acc_func(y_true=labels, y_pred=y_pre)
+        return
 
     @tf.function
     def _train_lwf_body(self, images, labels, prev_model=None, continual=0):
@@ -193,6 +250,12 @@ class Trainer():
             self.model.star()
             self.model.omega_info()
 
+        if self.method in ["A-GEM", "ER"]:
+            self.episodic_memory = ReplayBuffer(
+                self._mem_size * self.task_num * self.data.output_dim,
+                env_dict={"imgs": {"shape": self.data.input_shape},
+                          "labels": {"shape": self.data.output_dim}})
+
         # load dataset
         train_dataset, valid_dataset, test_dataset = self.load()
         train_datasets, valid_datasets, test_datasets = [train_dataset], [valid_dataset], [test_dataset]
@@ -246,6 +309,21 @@ class Trainer():
                                                  prev_model=prev_model,
                                                  continual=n_task)
 
+                        elif self.method in ["A-GEM", "ER"]:
+                            if self.episodic_memory.get_stored_size():
+                                epi_batch = 256 if self.episodic_memory.get_stored_size() > 256 else self.episodic_memory.get_stored_size()
+                                sample = self.episodic_memory.sample(epi_batch)
+                                episodic_img, episodic_label = sample["imgs"], sample["labels"]
+                            else:
+                                episodic_img, episodic_label = None, None
+
+                            train_body = self._train_agem_body if self.method == "A-GEM" else self._train_er_body
+                            train_body(train_images,
+                                       train_labels,
+                                       episodic_img,
+                                       episodic_label,
+                                       continual=n_task)
+
                         else:
                             self._train_body(train_images,
                                              train_labels,
@@ -258,13 +336,15 @@ class Trainer():
                     self.train_loss.reset_states()
                     self.acc_func.reset_states()
 
-                    test_losses, test_accuracy = [], []
+                    test_losses, test_accuracy, average_accuracy = [], [], []
                     for test_task, test_dataset in enumerate(test_datasets):
                         for (test_images, test_labels) in test_dataset:
                             self._test_body(test_images, test_labels, test_task, task_embedding[test_task])
                         # test lossを記録
                         test_losses.append(self.test_loss.result().numpy())
                         test_accuracy.append(self.acc_func.result().numpy())
+                        if n_task >= test_task:
+                            average_accuracy.append(self.acc_func.result().numpy())
                         # 訓練履歴のリセット
                         self.test_loss.reset_states()
                         self.acc_func.reset_states()
@@ -279,6 +359,7 @@ class Trainer():
                         "train_accuracy":train_accuracy,
                         "test_loss": test_losses,
                         "test_accuracy" : test_accuracy,
+                        "average_accuracy": sum(average_accuracy) / len(average_accuracy),
                         "time/epoch": time_per_episode
                     })
                     other_metrics = OrderedDict({
@@ -298,13 +379,28 @@ class Trainer():
                 if self.method in ["HyperNet"]:
                     weights = [self.model.hnet(token) for token in task_embedding[:n_task+1]]
                     self.model.set_weights_snapshots(weights)
+                if self.method in ["A-GEM", "ER"]:
+                    for k, (img, labels) in enumerate(train_dataset):
+                        self.episodic_memory.add(imgs=img,
+                                                 labels=labels)
+                        if k > int(self._mem_size * self.data.output_dim / self.batch_size):
+                            break
                 if self.method in ["LwF"]:
                     prev_model = copy.deepcopy(self.model)
                     #self.model.add_layer(new_class_num=self.data.output_dim)
+                if self.method in ["A-GEM"]:
+                    self.model.omega_info()
 
             self.progress_graph(all_loss, all_accuracy)
         
         return
+
+    def forgetting_measure(self, now_task_num, accuracy_list):
+        base = accuracy_list[now_task_num]
+        fj = max([accuracy_list[i] - base for i in range(now_task_num)])
+
+        return
+
 
     def progress_graph(self, loss, accuracy):
         plt.clf()
@@ -316,12 +412,14 @@ class Trainer():
         for i in range(loss.shape[1]):
             ax1.plot(n_epoch, loss[:,i], label="task{}".format(i+1))
         ax1.legend()
+        ax1.set_ylabel('loss')
         ax1.grid()
 
         ax2 = fig.add_subplot(2, 1, 2)
         for i in range(accuracy.shape[1]):
             ax2.plot(n_epoch, accuracy[:,i], label="task{}".format(i+1))
         ax2.legend()
+        ax2.set_ylabel('accuracy')
         ax2.grid()
         ax2.set_ylim(0, 1)
 

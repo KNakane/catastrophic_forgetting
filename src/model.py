@@ -168,7 +168,33 @@ class MyModel(Model):
             loss += -tf.reduce_mean(tf.reduce_sum(logit * label, axis=1))
         return loss
 
-    def optimize(self, loss, tape=None, other_variables=None,):
+    def agem_loss(self, grads, grads_ref):
+        grads = tf.concat([tf.reshape(grad, [-1]) for grad in grads], 0)
+        grads_ref = tf.concat([tf.reshape(grad, [-1]) for grad in grads_ref], 0)
+        dotp = tf.reduce_sum(tf.multiply(grads, grads_ref))
+        ref_mag = tf.reduce_sum(tf.multiply(grads_ref, grads_ref))
+        projected_gradients = tf.cond(tf.greater_equal(dotp, 0), lambda: tf.identity(grads_ref),
+                                      lambda: tf.identity(grads - ((dotp / ref_mag) * grads_ref)))
+        offset = 0
+        self.projected_gradients_list = [tf.zeros(v.get_shape()) for v in self.trainable_variables]
+        for v in range(len(self.projected_gradients_list)):
+            shape = self.projected_gradients_list[v].get_shape()
+            v_params = 1
+            for dim in shape:
+                v_params *= dim
+            self.projected_gradients_list[v] = tf.reshape(projected_gradients[offset:offset + v_params], shape)
+            offset += v_params
+        return self.projected_gradients_list
+
+    def agem_optimize(self, grads, other_variables=None):
+        if other_variables is not None:
+            trainable_variables = [*self.trainable_variables, other_variables]
+        else:
+            trainable_variables = self.trainable_variables
+        self.optimizer.method.apply_gradients(zip(grads, trainable_variables))
+        return
+
+    def optimize(self, loss, tape=None, other_variables=None):
         assert tape is not None, 'please set tape in optimize'
         if other_variables is not None:
             trainable_variables = [*self.trainable_variables, other_variables]
