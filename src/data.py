@@ -40,6 +40,27 @@ class Dataset():
         x_test = x_test[:, w_index]
         return x_train[:,:, h_index], x_valid[:,:, h_index], x_test[:,:, h_index]
 
+    def create_mncode(self):
+        self.mncode = [
+            tf.random.normal([1, self.size, self.size, self.channel], seed=c, dtype=tf.float32)
+            for c in range(self.output_dim)
+        ]
+        return
+
+    def add_mncode(self, imgs, classes):
+        epsilon = 0.3
+        lamda = 0.99
+        img_list = []
+        for img, cl in zip(imgs, classes):
+            if np.random.rand() < epsilon:
+                img = (1 - lamda) * img + lamda * self.mncode[np.argmax(cl)]
+            else:
+                img = np.expand_dims(img, axis=0)
+            img_list.append(img)
+        img = np.concatenate(img_list, axis=0)
+        return img
+
+
     def load(self, image, label, batch_size=32, buffer_size=1000, is_training=False):
         def preprocess_fn(image, label):
             '''A transformation function to preprocess raw data

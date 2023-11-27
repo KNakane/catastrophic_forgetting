@@ -101,6 +101,61 @@ class MyModel(Model):
                 self.FIM[k] += gamma * v
         return
 
+    def mn_forget(self, forget_data, forget_class, retain_data, retain_class, alpha):
+        lambda1, lambda2 = 10**(-3), 0.9
+
+        forget_FIMs = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+        retain_FIMs = [np.zeros(v.get_shape().as_list()) for v in self.trainable_variables]
+
+        # fissher info for retain data
+        for img, label in zip(retain_data, retain_class):
+            label = tf.expand_dims(label, axis=0)
+            with tf.GradientTape() as tape:
+                logits = self.__call__(img, trainable=False)
+
+                prob = tf.nn.log_softmax(logits)
+                loglikelihoods = tf.multiply(label, prob)
+                grads = tape.gradient(loglikelihoods, self.trainable_variables)
+            
+            for v, grad in enumerate(grads):
+                retain_FIMs[v] += np.square(grad)
+        
+        for v in range(len(retain_FIMs)):
+            retain_FIMs[v] /= len(retain_data)
+
+        # fissher info for forget data
+        if not isinstance(forget_data, list):
+            forget_data, forget_class = [forget_data], [forget_class]
+        for img, label in zip(forget_data, forget_class):
+            label = tf.expand_dims(label, axis=0)
+            with tf.GradientTape() as tape:
+                logits = self.__call__(img, trainable=False)
+                prob = tf.nn.log_softmax(logits)
+                loglikelihoods = tf.multiply(label, prob)
+                grads = tape.gradient(loglikelihoods, self.trainable_variables)
+            
+            for v, grad in enumerate(grads):
+                forget_FIMs[v] += np.square(grad)
+
+        for v in range(len(forget_FIMs)):
+            forget_FIMs[v] /= len(forget_data)
+
+        positive_weight_list, negative_weight_list = [], []
+        for i, (v, forget_FIM, retain_FIM) in enumerate(zip(self.trainable_variables, forget_FIMs, retain_FIMs)):
+            eta = forget_FIM / (retain_FIM + 1e-8)
+
+            #alpha = min(lambda1, lambda2 / np.max(eta))
+            #alpha = max(lambda1, lambda2 / np.max(eta))
+            #print(lambda1, lambda2, np.max(eta), lambda2 / np.max(eta), alpha)
+            alpha = lambda2 / (np.max(eta) + 1e-8)
+
+            positive_weight_list.append(v + alpha * eta)
+            negative_weight_list.append(v - alpha * eta)
+            #positive_weight_list.append(v + 1.12 * eta)
+            #negative_weight_list.append(v - 1.12 * eta)
+
+        return positive_weight_list, negative_weight_list
+
     def omega_info(self, xi=0.1):
         # https://github.com/spiglerg/TF_ContinualLearningViaSynapticIntelligence/blob/master/permuted_mnist.py
         if not hasattr(self, 'OMEGA'):

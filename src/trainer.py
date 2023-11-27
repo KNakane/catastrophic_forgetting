@@ -424,5 +424,6 @@ class Trainer():
         ax2.set_ylim(0, 1)
 
         plt.savefig("./progress_{}.png".format(self.method))
+        plt.clf()
         plt.close()
         return
